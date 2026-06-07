@@ -1,0 +1,16 @@
+llama-index-core
+llama-index-vector-stores-qdrant
+llama-index-embeddings-ollama
+llama-index-embeddings-openai
+llama-index-llms-openrouter
+llama-index-llms-openai
+llama-index-llms-ollama
+llama-index-readers-file
+pypdf
+qdrant-client
+pydantic-settings
+python-dotenv
+PyYAML
+streamlit
+fastapi
+uvicorn
