@@ -34,6 +34,8 @@ Obsidian wiki path:
 /Users/denishlinka/hermes/wiki
 ```
 
+If /Users/denishlinka/hermes/wiki is inaccessible, stop and tell Denis. Do not fall back to the source-controlled seed.
+
 RAG runtime:
 
 ```text
