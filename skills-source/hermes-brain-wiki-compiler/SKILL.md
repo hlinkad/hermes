@@ -24,25 +24,15 @@ Google Drive raw source -> hermes-brain-rag -> Qdrant
 Qdrant + source metadata -> hermes-brain-wiki-compiler -> wiki/
 ```
 
-`hermes-brain-rag` handles parsing, chunking, embeddings, and Qdrant. It does **not** need `SCHEMA.md`.
 This skill reads `SCHEMA.md` and decides how knowledge becomes `concepts/`, `entities/`, and `projects/` pages.
 
 ## Paths
 
-Source-controlled seed:
-
-```text
-/workspace/hermes-related-code/wiki
-/workspace/hermes-related-code/wiki/SCHEMA.md
-```
-
-Intended live Obsidian wiki path:
+Obsidian wiki path:
 
 ```text
 /Users/denishlinka/hermes/wiki
 ```
-
-Docker usually cannot see the live macOS Obsidian path unless it is mounted. If the live path is unavailable, write only to the source-controlled seed or stop and tell Denis what path is inaccessible.
 
 RAG runtime:
 
@@ -192,6 +182,8 @@ Keep pages concise. A definition page should explain the idea clearly enough for
 
 Update `wiki/index.md` with every created durable page:
 
+Below are only examples. Use the real page titles and slugs.
+
 ```markdown
 ## Concepts
 - [[quantization]] — Reduces model weight/activation precision to lower memory and compute cost.
@@ -239,7 +231,7 @@ Before reporting done:
 - Subagents handle section-level detail.
 - Pass excerpts/page ranges, not whole books.
 - Use cheap/fast models for extraction; use stronger models for final synthesis, dedupe, and contradiction handling.
-- If a subagent returns a long essay, compress it into the required structured fields before merging.
+- If a subagent returns a long essay, compress it carefully into the required structured fields before merging.
 
 ## Common Pitfalls
 
