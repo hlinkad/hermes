@@ -238,7 +238,29 @@ Append to `wiki/log.md`:
   - Review needs or unresolved questions.
 ```
 
-### 9. Verify
+### 9. Relate to existing graph
+
+After writing or updating pages, connect the new knowledge to the existing Obsidian graph.
+
+Search for adjacent existing pages before final verification:
+
+- synonyms or aliases that should be merged;
+- broader, narrower, or related concepts;
+- relevant entities, tools, papers, or standards;
+- Denis-specific projects affected by the new knowledge.
+
+Update ## Relationships sections with only high-signal links. Prefer explicit relationship notes over generic backlinks:
+- [[retrieval-augmented-generation]] — extends retrieval evaluation details.
+- [[qdrant]] — applies as the vector-store layer.
+- [[hermes-brain]] — informs project design implications.
+
+If the new source materially improves, or corrects an existing page, update that page directly with source provenance. If it contradicts an existing page, add a ## Contradictions or Uncertainties section with source citations and confidence levels.
+
+If several pages need the same missing intermediate concept, create or propose a durable bridge page.
+
+Avoid graph pollution: do not link passing mentions, generic terms, or weak associations.
+
+### 10. Verify
 
 Before reporting done:
 
