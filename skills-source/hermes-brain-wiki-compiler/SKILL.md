@@ -54,6 +54,25 @@ Use when Denis asks to:
 
 Do not use for raw ingest into Qdrant; use `hermes-brain-rag` for that.
 
+## Output Depth Modes
+
+Default to the user's objective, not to a generic summary.
+
+1. **Orientation mode** — concise concept pages for relearning terminology and relationships. Use this for broad source mapping, glossary building, or when Denis asks for a lightweight wiki entry.
+2. **Engineering deep-dive mode** — detailed source-grounded notes for designing or building something. Use this whenever Denis asks to design, implement, evaluate, compare, or build an engineering artifact, or says he needs hard technical detail. Do not stop at high-level summaries.
+
+Engineering deep-dive pages or project dossiers should include, when available from the source:
+
+- concrete mechanisms and architecture patterns;
+- component responsibilities and data/control flow;
+- APIs, schemas, contracts, state models, and invariants;
+- algorithms, pseudocode, formulas, prompts, or config examples;
+- operational constraints, failure modes, evaluation metrics, observability, governance, and trade-offs;
+- direct page-cited excerpts or paraphrases for non-obvious claims;
+- open implementation questions and experiments needed to validate the design.
+
+If the indexed source is high-level and lacks engineering detail, say so explicitly and preserve that limitation in the page/log instead of inflating it.
+
 ## Core Rule
 
 **Subagents analyze; the orchestrator writes.**
@@ -122,8 +141,11 @@ Required output:
 - candidate_entities: name, slug, what it is, source pages, confidence, why durable
 - candidate_projects: name, slug, relevance to Denis's projects, source pages
 - page_updates: existing page slug -> suggested additions
+- engineering_details: mechanisms, architecture patterns, APIs/contracts, algorithms/pseudocode, state/data models, constraints, failure modes, metrics, observability, implementation pitfalls, source pages
+- design_implications: what this source would imply if Denis were designing/building a related tool
 - wikilinks: proposed links between pages
 - contradictions_or_uncertainties
+- source_limitations: whether the source is high-level, vendor-biased, incomplete, or lacks implementation detail
 - discard: notable mentions that should NOT become pages
 ```
 
@@ -178,7 +200,7 @@ Default page body:
 ## Sources
 ```
 
-Keep pages concise. A definition page should explain the idea clearly enough for Denis to relearn it later without becoming a raw chapter dump.
+Keep orientation pages concise. For engineering deep-dive mode, create a detailed page or project dossier with source-grounded sections such as Architecture, Components, Data model/state, APIs/contracts, Algorithms, Operational concerns, Failure modes, Metrics/evals, Implementation checklist, and Open questions. Do not turn a vendor/high-level source into fake implementation detail; label missing detail clearly.
 
 ### 7. Update navigation
 
