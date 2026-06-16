@@ -14,7 +14,9 @@ Current local project path:
 /workspace/market-gap-research
 ```
 
-Future skills for the market-gap analysis/research-loop tooling should live here and refer to the standalone project by path and command, for example:
+## Implemented research-loop skills
+
+DH-117 implements these project-local skills/spec modules in this repo:
 
 ```text
 skills/market-gap-research/collector/SKILL.md
@@ -26,6 +28,30 @@ skills/market-gap-research/strategist/SKILL.md
 skills/market-gap-research/reporter/SKILL.md
 skills/market-gap-research/run-controller/SKILL.md
 ```
+
+Each spec defines:
+
+- explicit typed inputs and outputs;
+- stop conditions;
+- persisted-state boundaries;
+- source-content-as-untrusted-data handling;
+- fixture verification commands.
+
+## How Hermes should use these
+
+These files are **project-local agent skill specs**, not global Hermes-native skills. By default they are not copied into `~/.hermes/skills`, not installed through `skill_manage`, and not promoted to `skills-source/`.
+
+When Hermes is working on the market-gap research loop, load/read the relevant file from this repository as project context and operate the standalone project through its documented CLI surface. Promote any skill globally only through a separate approved task.
+
+## Fixture orchestration check
+
+From `hermes-related-code`, validate the skill specs and run the standalone project against deterministic fixtures:
+
+```bash
+python3 skills/market-gap-research/scripts/run_fixture_orchestration.py   --project-root /workspace/market-gap-research
+```
+
+The script checks all eight `SKILL.md` files for required sections, then runs a one-turn fixture loop and downstream context/statistics/cluster/report commands against a temporary SQLite DB.
 
 ## Project command surface
 
