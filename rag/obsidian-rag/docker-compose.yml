@@ -1,11 +1,55 @@
 services:
   qdrant:
     image: qdrant/qdrant:latest
+    restart: unless-stopped
     ports:
       - "6333:6333"
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
 
+  rag-api:
+    image: python:3.11-slim
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - .:/app:ro
+      - rag_api_pip_cache:/root/.cache/pip
+    env_file:
+      - deep_notes/.env
+    environment:
+      API_PORT: "8000"
+      QDRANT_URL: "http://host.docker.internal:6333"
+      COLLECTION_NAME: "hermes_brain"
+      EMBED_PROVIDER: "ollama"
+      EMBED_MODEL: "bge-m3"
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      AUTO_CONTEXT_ENABLED: "true"
+      AUTO_CONTEXT_TOP_K: "5"
+      AUTO_CONTEXT_MIN_SCORE: "0.55"
+      AUTO_CONTEXT_MAX_CHARS: "3500"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - sh
+      - -lc
+      - |
+        python -m pip install --upgrade pip
+        python -m pip install -r deep_notes/requirements.txt
+        exec python -m uvicorn deep_notes.api:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+
 volumes:
   qdrant_data:
+  rag_api_pip_cache:

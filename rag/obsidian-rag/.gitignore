@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 node_modules/
 obsidian-plugin/main.js
+plugins-source/.DS_Store

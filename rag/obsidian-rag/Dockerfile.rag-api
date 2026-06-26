@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY deep_notes/requirements.txt /tmp/requirements.txt
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r /tmp/requirements.txt
+
+COPY deep_notes ./deep_notes
+
+EXPOSE 8000
+
+CMD ["python", "-m", "uvicorn", "deep_notes.api:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -105,42 +105,46 @@ The helper:
 Run the local API in the RAG runtime:
 
 ```bash
-cd /gdrive/hermes-brain/rag/obsidian-rag
-/workspace/.hermes-venvs/hermes-global-scripts/bin/python -m uvicorn deep_notes.api:app --host 127.0.0.1 --port 8000
+cd /workspace/hermes-related-code/rag/obsidian-rag
+/workspace/.venv/bin/python -m uvicorn deep_notes.api:app --host 127.0.0.1 --port 8000
 ```
 
 Test retrieval-only context over HTTP:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/context \
-  -H "Authorization: Bearer $API_KEY" \
+  -H 'Authorization: Bearer <rag-token>' \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"Adapter design pattern implementation"}'
 ```
 
-Plugin artifact:
+Plugin artifacts:
 
 ```text
-/gdrive/hermes-brain/rag/obsidian-rag/plugins/hermes-brain-rag/__init__.py
+/workspace/hermes-related-code/plugins-source/hermes-brain-rag/__init__.py
+/workspace/hermes-related-code/plugins-source/hermes-brain-rag/plugin.yaml
+/workspace/hermes-related-code/rag/obsidian-rag/plugins/hermes-brain-rag/__init__.py
+/workspace/hermes-related-code/rag/obsidian-rag/plugins/hermes-brain-rag/plugin.yaml
 ```
 
 Install on the host after confirming Qdrant/Ollama/RAG paths are reachable from Hermes:
 
 ```bash
 mkdir -p ~/.hermes/plugins/hermes-brain-rag
-cp /gdrive/hermes-brain/rag/obsidian-rag/plugins/hermes-brain-rag/__init__.py ~/.hermes/plugins/hermes-brain-rag/__init__.py
+cp /Users/denishlinka/hermes-infra/hermes-related-code/plugins-source/hermes-brain-rag/plugin.yaml ~/.hermes/plugins/hermes-brain-rag/plugin.yaml
+cp /Users/denishlinka/hermes-infra/hermes-related-code/plugins-source/hermes-brain-rag/__init__.py ~/.hermes/plugins/hermes-brain-rag/__init__.py
 hermes plugins enable hermes-brain-rag
 hermes gateway restart
 ```
 
-The exact callback arguments can evolve, so the callback accepts `**kwargs` and tries both `user_message` and `messages`.
+The exact callback arguments can evolve, so the callback accepts `**kwargs` and tries `user_message`, `conversation_history`, and `messages`.
 
 ## Runtime env
 
-Recommended non-secret settings in the active Hermes `.env`:
+Recommended non-secret settings for either `deep_notes/.env` (standalone repo testing) or the active Hermes `.env` (`~/.hermes/.env` for gateway/plugin runtime):
 
 ```env
-VAULT_PATH=/Users/denishlinka/hermes
+VAULT_PATH=/Users/denishlinka/hermes/brain
 SOURCE_PATHS=/gdrive/hermes-brain
 BOOK_PATHS=/gdrive/hermes-brain/books,/gdrive/hermes-brain/pdf-docs
 QDRANT_URL=http://127.0.0.1:6333
@@ -148,11 +152,11 @@ COLLECTION_NAME=hermes_brain
 EMBED_PROVIDER=ollama
 EMBED_MODEL=bge-m3
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-v4-pro
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.5
 AUTO_CONTEXT_ENABLED=true
 AUTO_CONTEXT_TOP_K=5
-AUTO_CONTEXT_MIN_SCORE=0.25
+AUTO_CONTEXT_MIN_SCORE=0.55
 AUTO_CONTEXT_MAX_CHARS=3500
 HERMES_BRAIN_RAG_CONTEXT_URL=http://127.0.0.1:8000/api/context
 HERMES_BRAIN_RAG_API_KEY=<same value as API_KEY, keep secret>
@@ -166,5 +170,7 @@ HERMES_BRAIN_RAG_TIMEOUT=2.5
 3. `BOOK_PATHS` contains at least one extracted book/PDF visible to this runtime.
 4. `python -m deep_notes.book_index` prints section/page entries.
 5. `python -m deep_notes.ingest` indexes vault/source/book docs.
-6. `python -m deep_notes.hermes_context "Adapter design pattern implementation"` returns context with book/page citations.
-7. A negative query returns empty context or an explicit insufficient-context answer.
+6. `python -m deep_notes.hermes_context "linear regression"` returns context with book/page citations.
+7. `/api/context` returns the same page-cited context when called with the configured API key.
+8. The plugin `pre_llm_call` hook returns `{ "context": ... }` for that API response and fails closed on API errors.
+9. A negative query returns empty context or an explicit insufficient-context answer.

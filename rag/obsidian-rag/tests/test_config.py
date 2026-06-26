@@ -7,7 +7,8 @@ def test_defaults():
     assert s.embed_model == "bge-m3"
     assert s.vector_store_provider == "qdrant"
     assert s.chunk_strategy == "markdown"
-    assert s.llm_provider == "openrouter"
+    assert s.llm_provider == "openai"
+    assert s.llm_model == "gpt-5.5"
     assert s.book_paths == ""
     assert s.book_pages_per_chunk == 3
     assert s.auto_context_enabled is True

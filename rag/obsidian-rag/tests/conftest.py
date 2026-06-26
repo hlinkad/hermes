@@ -1,8 +1,8 @@
 """Shared test fixtures.
 
-Strips environment variables and the dotenv file so tests see the
+Strips environment variables and configured env files so tests see the
 pure code defaults from `Settings`, not whatever happens to live in
-the developer's local `deep_notes/.env`.
+`deep_notes/.env` or the active Hermes `.env`.
 """
 
 import pytest

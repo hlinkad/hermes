@@ -3,49 +3,30 @@ import re
 from pathlib import Path
 
 from pydantic import model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-try:
-    from dotenv import load_dotenv
-except ImportError:  # pragma: no cover - fallback for minimal environments
-    load_dotenv = None
-
+_PACKAGE_DIR = Path(__file__).resolve().parent
+_PROJECT_ENV_FILE = _PACKAGE_DIR / ".env"
 _HERMES_ENV_FILE = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / ".env"
 
-
-def _load_env_without_override(path: Path) -> None:
-    """Load simple KEY=VALUE dotenv files without overriding existing env vars."""
-    if load_dotenv is not None:
-        load_dotenv(path, override=False)
-        return
-    if not path.is_file():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key or key in os.environ:
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1]
-        os.environ[key] = value
-
-
-# Load the single active env file for Hermes Brain RAG. Keep both secrets and
-# deep_notes runtime settings in ~/.hermes/.env, or in $HERMES_HOME/.env for a
-# non-default Hermes profile. OS environment values still have highest priority.
-_load_env_without_override(_HERMES_ENV_FILE)
+# Settings precedence is:
+# 1. Explicit Settings(...) overrides
+# 2. OS environment variables
+# 3. Project-local deep_notes/.env, for standalone RAG testing
+# 4. Active Hermes ~/.hermes/.env, for gateway/plugin runtime
+# 5. Code defaults below
+#
+# Keep secrets out of git. deep_notes/.env is ignored; .env.example documents
+# non-secret defaults and comments for API keys.
+_ENV_FILES = (str(_HERMES_ENV_FILE), str(_PROJECT_ENV_FILE))
 
 
 class Settings(BaseSettings):
-    model_config = {}
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # API
     api_port: int = 8000
@@ -88,8 +69,8 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
 
     # LLM
-    llm_provider: str = "openrouter"  # "openrouter" | "openai" | "ollama" | "deepseek"
-    llm_model: str = "anthropic/claude-sonnet-4"
+    llm_provider: str = "openai"  # "openrouter" | "openai" | "ollama" | "deepseek"
+    llm_model: str = "gpt-5.5"
     openrouter_api_key: str = ""
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -99,7 +80,7 @@ class Settings(BaseSettings):
     # Compact context injected by the optional Hermes pre_llm_call plugin.
     auto_context_enabled: bool = True
     auto_context_top_k: int = 5
-    auto_context_min_score: float = 0.25
+    auto_context_min_score: float = 0.55
     auto_context_max_chars: int = 3500
 
 

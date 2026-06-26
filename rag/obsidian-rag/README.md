@@ -71,7 +71,7 @@ Every box on the right is a factory in `deep_notes/components/`. Adding a new pr
 
 - `EMBED_PROVIDER` — `ollama` | `openai`
 - `VECTOR_STORE_PROVIDER` — `qdrant`
-- `LLM_PROVIDER` — `ollama` | `openrouter` | `openai`
+- `LLM_PROVIDER` — `ollama` | `openrouter` | `openai` | `deepseek`
 - `CHUNK_STRATEGY` — `sentence` | `token` | `markdown`
 
 ---
@@ -95,7 +95,10 @@ ollama pull llama3.2   # or configure a different LLM provider
 
 # 4. Configure
 cp deep_notes/.env.example deep_notes/.env
-# Edit deep_notes/.env — at minimum set VAULT_PATH to your Obsidian vault
+# Edit deep_notes/.env if needed.
+# Mac-host runs can keep VAULT_PATH=/Users/denishlinka/hermes/brain and localhost URLs.
+# Hermes Docker runs should leave VAULT_PATH empty unless /Users is mounted,
+# and should use host.docker.internal for Qdrant/Ollama.
 ```
 
 ### Index your vault
@@ -138,19 +141,25 @@ Then copy the built plugin folder into your vault's `.obsidian/plugins/` directo
 
 ## Configuration reference
 
-All settings live in `deep_notes/.env`. The most useful knobs:
+All settings can come from OS environment variables, the ignored project file `deep_notes/.env`, or the active Hermes env file `~/.hermes/.env`. Precedence is: explicit `Settings(...)` overrides > OS env > `deep_notes/.env` > `~/.hermes/.env` > code defaults. The most useful knobs:
 
-| Variable | Default | Options |
+| Variable | Default/example | Notes |
 |---|---|---|
-| `VAULT_PATH` | — | Absolute path to your Obsidian vault |
+| `VAULT_PATH` | `/Users/denishlinka/hermes/brain` | Mac-host vault path. Leave empty in Hermes Docker unless that path is mounted. |
+| `SOURCE_PATHS` | `/gdrive/hermes-brain` | Comma-separated extra text/extracted source roots. |
+| `BOOK_PATHS` | `/gdrive/hermes-brain/books,/gdrive/hermes-brain/pdf-docs` | Comma-separated book/PDF roots. |
 | `EMBED_PROVIDER` | `ollama` | `ollama`, `openai` |
-| `EMBED_MODEL` | `bge-m3` | Any model the provider supports |
+| `EMBED_MODEL` | `bge-m3` | Changing this requires rebuilding Qdrant. |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Use `http://host.docker.internal:11434` from Hermes Docker. |
 | `VECTOR_STORE_PROVIDER` | `qdrant` | `qdrant` |
+| `QDRANT_URL` | `http://127.0.0.1:6333` | Use `http://host.docker.internal:6333` from Hermes Docker. |
+| `COLLECTION_NAME` | `hermes_brain` | Shared Hermes Brain collection. |
 | `CHUNK_STRATEGY` | `markdown` | `sentence`, `token`, `markdown` |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `512` / `50` | Any integer |
-| `LLM_PROVIDER` | `openrouter` | `openrouter`, `openai`, `ollama` |
-| `LLM_MODEL` | `anthropic/claude-sonnet-4` | Any model the provider supports |
-| `SIMILARITY_TOP_K` | `3` | Number of chunks retrieved per query |
+| `LLM_PROVIDER` | `openai` | `openai`, `openrouter`, `ollama`, `deepseek` |
+| `LLM_MODEL` | `gpt-5.5` | Retrieval-only commands do not need an LLM key. |
+| `SIMILARITY_TOP_K` | `8` | Number of chunks retrieved per query |
+| `AUTO_CONTEXT_MIN_SCORE` | `0.55` | Threshold for automatic Hermes context injection |
 
 See `deep_notes/.env.example` for the full list.
 
