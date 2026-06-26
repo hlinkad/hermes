@@ -1,11 +1,16 @@
 # Skills
 
-This directory is the centralized home for project-scoped skill specs/modules that are developed alongside Hermes-related code but target separate project repositories.
+This directory is the centralized home for Hermes-related skills and project-scoped skill specs/modules developed alongside Hermes-related code.
 
 ## Layout
 
 ```text
 skills/
+  <skill>/
+    SKILL.md
+    references/
+    scripts/
+    templates/
   <project>/
     <skill>/
       SKILL.md
@@ -14,9 +19,8 @@ skills/
       templates/
 ```
 
-Use this directory when a skill belongs to a specific external project and should not be promoted yet as a global Hermes skill.
-
-Global/promoted reusable Hermes skills continue to live under `skills-source/<skill>/SKILL.md` unless the repository convention is intentionally changed later.
+Use top-level `skills/<skill>/SKILL.md` for global/promoted reusable Hermes skills.
+Use `skills/<project>/<skill>/SKILL.md` when a skill belongs to a specific external project and should not be promoted yet as a global Hermes skill.
 
 ## Boundaries
 

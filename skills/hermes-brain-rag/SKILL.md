@@ -52,8 +52,8 @@ Qdrant is a derived retrieval cache only.
 Canonical order:
 
 1. Google Drive originals / extracted sources under `/gdrive/hermes-brain`.
-2. Obsidian raw cards under `/Users/denishlinka/hermes/raw` when approved by Denis.
-3. Obsidian compiled wiki under `/Users/denishlinka/hermes/wiki` when approved by Denis.
+2. Obsidian raw cards under `/Users/denishlinka/hermes/brain/raw` when approved by Denis.
+3. Obsidian compiled wiki under `/Users/denishlinka/hermes/brain/wiki` when approved by Denis.
 4. Qdrant vectors rebuilt from the above plus configured books.
 
 Do not write to Obsidian without explicit approval.
@@ -133,7 +133,7 @@ cd /workspace/hermes-related-code/rag
 Keep these in the single active Hermes env file, usually `~/.hermes/.env` on the host:
 
 ```env
-VAULT_PATH=/Users/denishlinka/hermes
+VAULT_PATH=/Users/denishlinka/hermes/brain
 SOURCE_PATHS=/gdrive/hermes-brain
 BOOK_PATHS=/gdrive/hermes-brain/books,/gdrive/hermes-brain/pdf-docs
 QDRANT_URL=http://127.0.0.1:6333
@@ -141,11 +141,11 @@ COLLECTION_NAME=hermes_brain
 EMBED_PROVIDER=ollama
 EMBED_MODEL=bge-m3
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-v4-pro
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.5
 AUTO_CONTEXT_ENABLED=true
 AUTO_CONTEXT_TOP_K=5
-AUTO_CONTEXT_MIN_SCORE=0.25
+AUTO_CONTEXT_MIN_SCORE=0.55
 AUTO_CONTEXT_MAX_CHARS=3500
 ```
 
@@ -165,10 +165,18 @@ See `references/mac-host-docker-workspace-architecture.md` for the recommended t
 
 Use a Hermes plugin `pre_llm_call` hook, not a gateway-only hook, because plugin hooks work in CLI and gateway sessions. Official hook behavior: `pre_llm_call` can return `{ "context": "..." }` and Hermes prepends that context to the current user message.
 
-The project artifact is:
+The source-controlled plugin artifact is:
 
 ```text
-/workspace/hermes-related-code/rag/plugins/hermes-brain-rag/__init__.py
+/workspace/hermes-related-code/plugins-source/hermes-brain-rag/__init__.py
+/workspace/hermes-related-code/plugins-source/hermes-brain-rag/plugin.yaml
+```
+
+The RAG app also keeps a packaged copy for tests/examples:
+
+```text
+/workspace/hermes-related-code/rag/obsidian-rag/plugins/hermes-brain-rag/__init__.py
+/workspace/hermes-related-code/rag/obsidian-rag/plugins/hermes-brain-rag/plugin.yaml
 ```
 
 The live plugin is dependency-free and calls the local RAG API endpoint instead of importing LlamaIndex/Qdrant into the Hermes host process. This matters when RAG dependencies live in the Docker venv at `/workspace/.venv` but Hermes/gateway runs on the Mac host.
@@ -176,7 +184,7 @@ The live plugin is dependency-free and calls the local RAG API endpoint instead 
 Run the local RAG API from the RAG runtime:
 
 ```bash
-cd /workspace/hermes-related-code/rag
+cd /workspace/hermes-related-code/rag/obsidian-rag
 /workspace/.venv/bin/python -m uvicorn deep_notes.api:app --host 127.0.0.1 --port 8000
 ```
 
@@ -192,8 +200,16 @@ Then install/enable on the host:
 
 ```bash
 mkdir -p ~/.hermes/plugins/hermes-brain-rag
-cp /workspace/hermes-related-code/rag/plugins/hermes-brain-rag/__init__.py ~/.hermes/plugins/hermes-brain-rag/__init__.py
+cp /Users/denishlinka/hermes-infra/hermes-related-code/plugins-source/hermes-brain-rag/plugin.yaml ~/.hermes/plugins/hermes-brain-rag/plugin.yaml
+cp /Users/denishlinka/hermes-infra/hermes-related-code/plugins-source/hermes-brain-rag/__init__.py ~/.hermes/plugins/hermes-brain-rag/__init__.py
 hermes plugins enable hermes-brain-rag
+hermes gateway restart
+```
+
+If `hermes plugins enable` is unavailable in the installed CLI, use:
+
+```bash
+hermes plugins install ~/.hermes/plugins/hermes-brain-rag
 hermes gateway restart
 ```
 
@@ -216,8 +232,9 @@ Minimum done signal:
 Verified with:
 
 ```text
-24 passed in 1.04s
-py_compile passed for book_index, hermes_context, ingest, query, plugin
-sample book index output: # Programming Design Patterns / pp. 184-186: Adapter
-sample load_documents metadata included layer=book, section_title=Adapter, page_range=184-186
+29 passed in 1.14s
+5 plugin regression tests passed
+py_compile passed for source, packaged, and installed live-profile plugin copies
+linear regression retrieval returned Mathematics For Machine Learning page-cited context
+/api/context + plugin live-smoke returned page-cited context through the HTTP RAG API
 ```

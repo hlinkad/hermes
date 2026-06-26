@@ -31,10 +31,10 @@ This skill reads `SCHEMA.md` and decides how knowledge becomes `concepts/`, `ent
 Obsidian wiki path:
 
 ```text
-/Users/denishlinka/hermes/wiki
+/Users/denishlinka/hermes/brain/wiki
 ```
 
-If /Users/denishlinka/hermes/wiki is inaccessible, stop and tell Denis. Do not fall back to the source-controlled seed.
+If /Users/denishlinka/hermes/brain/wiki is inaccessible, stop and tell Denis. Do not fall back to the source-controlled seed.
 
 RAG runtime:
 

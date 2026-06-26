@@ -39,7 +39,7 @@ Each spec defines:
 
 ## How Hermes should use these
 
-These files are **project-local agent skill specs**, not global Hermes-native skills. By default they are not copied into `~/.hermes/skills`, not installed through `skill_manage`, and not promoted to `skills-source/`.
+These files are **project-local agent skill specs**, not global Hermes-native skills. By default they are not copied into `~/.hermes/skills`, not installed through `skill_manage`, and not promoted to top-level `skills/<skill>/`.
 
 When Hermes is working on the market-gap research loop, load/read the relevant file from this repository as project context and operate the standalone project through its documented CLI surface. Promote any skill globally only through a separate approved task.
 
@@ -78,4 +78,4 @@ make lint
 
 - Project code, fixtures, schema/table contracts, and runtime docs remain in `/workspace/market-gap-research`.
 - Project-scoped agent skills/specs for DH-117 and related research-loop work live in `hermes-related-code/skills/market-gap-research/`.
-- If a market-gap skill becomes generally reusable across projects, promote it separately to `skills-source/<skill>/SKILL.md` with an explicit follow-up.
+- If a market-gap skill becomes generally reusable across projects, promote it separately to top-level `skills/<skill>/SKILL.md` with an explicit follow-up.

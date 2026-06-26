@@ -10,4 +10,4 @@ Append-only log of meaningful wiki compilation actions.
   - `wiki/index.md`
   - `wiki/log.md`
 - Notes:
-  - Live Obsidian vault path remains `/Users/denishlinka/hermes/wiki`; this repository copy is the source-controlled seed.
+  - Live Obsidian vault path remains `/Users/denishlinka/hermes/brain/wiki`; this repository copy is the source-controlled seed.

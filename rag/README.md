@@ -9,11 +9,11 @@ The goal is to make Hermes Brain searchable at scale without turning the vector 
 Hermes Brain uses a modern, rebuildable RAG stack:
 
 - **Source storage:** Google Drive folder `/gdrive/hermes-brain`
-- **Compiled brain:** Obsidian vault `/Users/denishlinka/hermes`
+- **Compiled brain:** Obsidian vault `/Users/denishlinka/hermes/brain`
 - **RAG framework:** LlamaIndex, adapted from `lucmir/obsidian-rag`
 - **Vector database:** Qdrant in Docker
 - **Embedding model:** Ollama `bge-m3`
-- **Answer model:** DeepSeek via API
+- **Answer model:** OpenAI GPT-5.5 via API
 - **Local answer fallback:** optional Ollama `llama3.2`, not required for the main setup
 
 Framework path:
@@ -34,7 +34,7 @@ Single active env file:
 ~/.hermes/.env
 ```
 
-Do not create a live `deep_notes/.env`. Keep `DEEPSEEK_API_KEY` and the `deep_notes` runtime settings in the Hermes env file so Hermes and Hermes Brain RAG read one source.
+Do not create a live `deep_notes/.env`. Keep `OPENAI_API_KEY` and the `deep_notes` runtime settings in the Hermes env file so Hermes and Hermes Brain RAG read one source.
 
 ## Architecture
 
@@ -63,7 +63,7 @@ Qdrant collection: hermes_brain
         │
         │ semantic retrieval cache
         ▼
-DeepSeek answer generation
+OpenAI GPT-5.5 answer generation
         │
         │ grounded answer from retrieved context
         ▼
@@ -88,7 +88,7 @@ Embedding models and answer/chat models are different things.
 
 `bge-m3` is an embedding model. It converts text chunks into vectors so Qdrant can do semantic similarity search.
 
-DeepSeek is the answer model. It receives retrieved chunks and writes the final answer.
+OpenAI GPT-5.5 is the answer model. It receives retrieved chunks and writes the final answer.
 
 Changing the answer model does **not** require rebuilding Qdrant.
 
@@ -99,8 +99,8 @@ Recommended default:
 ```text
 EMBED_PROVIDER=ollama
 EMBED_MODEL=bge-m3
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-v4-pro
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.5
 ```
 
 ## What was adapted in `obsidian-rag`
@@ -112,7 +112,7 @@ The upstream project originally focused on one Obsidian vault path. Hermes Brain
 - Metadata fields: `file_path`, `source_root`, `source_kind`, `layer`, `tags`, `title`, `sources`.
 - Layer inference: `wiki`, `raw`, `vault`, `drive`.
 - Generated/tooling directory skips: `.derived`, `rag`, `.obsidian`, `node_modules`, `__pycache__`, etc.
-- Direct DeepSeek answer provider through the LlamaIndex OpenAI-compatible client.
+- Direct OpenAI answer provider through the LlamaIndex OpenAI client.
 
 Relevant files:
 
@@ -128,7 +128,7 @@ Relevant files:
 
 ## Runtime components
 
-The full setup runs on the Mac host, not inside the current Hermes Docker backend, because the current backend may not see `/Users/denishlinka/hermes` and may not have access to Docker.
+The full setup runs on the Mac host, not inside the current Hermes Docker backend, because the current backend may not see `/Users/denishlinka/hermes/brain` and may not have access to Docker.
 
 You need these running on the Mac host:
 
@@ -137,7 +137,7 @@ You need these running on the Mac host:
 3. Ollama background service.
 4. Ollama `bge-m3` model.
 5. Python environment for `obsidian-rag`.
-6. DeepSeek API key and `deep_notes` runtime settings in `~/.hermes/.env`.
+6. OpenAI API key and `deep_notes` runtime settings in `~/.hermes/.env`.
 
 ## Qdrant setup from scratch
 
@@ -405,13 +405,13 @@ You should see `bge-m3`.
 
 ### Optional local answer model
 
-Only needed if you want a local answer-generation fallback instead of DeepSeek.
+Only needed if you want a local answer-generation fallback instead of OpenAI GPT-5.5.
 
 ```bash
 ollama pull llama3.2
 ```
 
-For the current recommended setup, `llama3.2` is optional because DeepSeek is the answer model.
+For the current recommended setup, `llama3.2` is optional because OpenAI GPT-5.5 is the answer model.
 
 ### Ollama lifecycle commands
 
@@ -486,12 +486,12 @@ cp .env.hermes-brain.example .env
 chmod 600 .env
 ```
 
-Edit `.env` manually and add your real DeepSeek API key.
+Edit `.env` manually and add your real OpenAI API key.
 
 Recommended current config:
 
 ```env
-VAULT_PATH=/Users/denishlinka/hermes
+VAULT_PATH=/Users/denishlinka/hermes/brain
 SOURCE_PATHS=/gdrive/hermes-brain
 
 EMBED_PROVIDER=ollama
@@ -506,27 +506,18 @@ CHUNK_STRATEGY=markdown
 CHUNK_SIZE=512
 CHUNK_OVERLAP=50
 
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-chat
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_API_KEY=<your key>
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.5
+OPENAI_API_KEY=<your key>
 
 SIMILARITY_TOP_K=8
 ```
 
-If your DeepSeek V4 Pro provider uses a model ID other than `deepseek-chat`, replace `LLM_MODEL` with that exact ID.
-
-DeepSeek's official OpenAI-compatible base URL is:
-
-```text
-https://api.deepseek.com
-```
-
-Do not treat `/v1` as the model version. If a specific SDK or proxy requires `/v1`, follow that provider's docs, but the direct DeepSeek API docs use `https://api.deepseek.com`.
+If your OpenAI account exposes GPT-5.5 under a different exact model ID, replace `LLM_MODEL` with that exact ID.
 
 This `.env` belongs to the standalone RAG runtime under `obsidian-rag`. It is separate from configuring Hermes Agent itself. For Hermes Agent model/provider setup, use Hermes CLI commands such as `hermes model`, `hermes auth add`, and `hermes config set ...`; do not hand-edit Hermes `config.yaml` unless the CLI cannot express the setting.
 
-If using OpenRouter instead of direct DeepSeek API:
+If using OpenRouter instead of direct OpenAI API:
 
 ```env
 LLM_PROVIDER=openrouter
@@ -541,7 +532,7 @@ LLM_PROVIDER=ollama
 LLM_MODEL=llama3.2
 ```
 
-## Securely inserting the DeepSeek API key
+## Securely inserting the OpenAI API key
 
 Avoid pasting secrets into terminal commands that get saved to shell history.
 
@@ -549,28 +540,28 @@ One safe pattern:
 
 ```bash
 cd /gdrive/hermes-brain/rag/obsidian-rag/deep_notes
-read -r -s -p "DeepSeek API key: " DEEPSEEK_API_KEY
+read -r -s -p "OpenAI API key: " OPENAI_API_KEY
 echo
 python3 - <<'PY'
 from pathlib import Path
 import os
 
 env = Path('.env')
-key = os.environ['DEEPSEEK_API_KEY']
+key = os.environ['OPENAI_API_KEY']
 lines = env.read_text().splitlines()
 out = []
 seen = False
 for line in lines:
-    if line.startswith('DEEPSEEK_API_KEY='):
-        out.append('DEEPSEEK_API_KEY=' + key)
+    if line.startswith('OPENAI_API_KEY='):
+        out.append('OPENAI_API_KEY=' + key)
         seen = True
     else:
         out.append(line)
 if not seen:
-    out.append('DEEPSEEK_API_KEY=' + key)
+    out.append('OPENAI_API_KEY=' + key)
 env.write_text('\n'.join(out) + '\n')
 PY
-unset DEEPSEEK_API_KEY
+unset OPENAI_API_KEY
 ```
 
 ## Source visibility check
@@ -578,13 +569,13 @@ unset DEEPSEEK_API_KEY
 Before ingesting, confirm the host can see both source roots:
 
 ```bash
-test -d /Users/denishlinka/hermes && echo "vault ok"
+test -d /Users/denishlinka/hermes/brain && echo "vault ok"
 test -d /gdrive/hermes-brain && echo "drive ok"
 ```
 
 If `/gdrive/hermes-brain` is not mounted on the host, use the actual Google Drive path on the Mac and set `SOURCE_PATHS` to that path.
 
-If the command runs inside a Docker/backend sandbox that cannot see `/Users/denishlinka/hermes`, run ingestion on the Mac host instead.
+If the command runs inside a Docker/backend sandbox that cannot see `/Users/denishlinka/hermes/brain`, run ingestion on the Mac host instead.
 
 ## Ingestion
 
@@ -621,7 +612,7 @@ curl -s http://127.0.0.1:6333/collections/hermes_brain
 
 Vault files:
 
-- Markdown files under `/Users/denishlinka/hermes`.
+- Markdown files under `/Users/denishlinka/hermes/brain`.
 - The loader skips `.obsidian`, `.git`, `.trash`, `node_modules`, `__pycache__`, `.derived`, `vector-index`, and `rag`.
 
 Drive/source files:
@@ -645,7 +636,7 @@ Binary files such as PDFs, images, Word docs, and scans must be OCR/extracted in
 
 ## Retrieval-only smoke test
 
-Do this before testing answer generation. It proves Qdrant plus embeddings work independently of DeepSeek.
+Do this before testing answer generation. It proves Qdrant plus embeddings work independently of the OpenAI answer model.
 
 ```bash
 cd /gdrive/hermes-brain/rag/obsidian-rag
@@ -671,7 +662,7 @@ Expected result:
 - Results include `wiki/`, `raw/`, or Drive-derived source paths depending on the question.
 - The output is grounded in actual files, not generated text.
 
-## Answer-generation smoke test with DeepSeek
+## Answer-generation smoke test with OpenAI GPT-5.5
 
 After retrieval works, test answer generation.
 
@@ -697,7 +688,7 @@ PY
 Expected behavior:
 
 - Retrieval lists real source files first.
-- DeepSeek answers using only retrieved context.
+- OpenAI GPT-5.5 answers using only retrieved context.
 - If context is insufficient, the answer should say so rather than hallucinating.
 
 ## Negative test
@@ -765,12 +756,12 @@ Complete means:
 2. Ollama starts as a background service and responds on `http://127.0.0.1:11434`.
 3. `bge-m3` is installed in Ollama.
 4. Python dependencies install successfully in `.venv`.
-5. `.env` has correct paths, Qdrant URL, Ollama URL, and DeepSeek API config.
+5. `.env` has correct paths, Qdrant URL, Ollama URL, and OpenAI API config.
 6. The ingest command indexes documents from the Obsidian vault.
 7. The ingest command indexes text/extracted material from Google Drive/source paths.
 8. Qdrant collection `hermes_brain` exists after ingest.
 9. Retrieval-only smoke test returns relevant source chunks.
-10. Answer-generation smoke test returns grounded answers through DeepSeek.
+10. Answer-generation smoke test returns grounded answers through OpenAI GPT-5.5.
 11. Negative test does not hallucinate missing private/nonexistent information.
 12. Rebuild path is documented and tested.
 13. A small eval set exists for recurring quality checks.
@@ -858,18 +849,17 @@ source .venv/bin/activate
 python -m deep_notes.ingest
 ```
 
-### DeepSeek auth or model error
+### OpenAI auth or model error
 
 Check `.env`:
 
 ```env
-LLM_PROVIDER=deepseek
+LLM_PROVIDER=openai
 LLM_MODEL=<exact model id from provider>
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_API_KEY=<real key>
+OPENAI_API_KEY=<real key>
 ```
 
-If your DeepSeek V4 Pro access is through a non-official provider, the base URL and model ID may differ. Use the provider's OpenAI-compatible base URL and exact model ID.
+If GPT-5.5 access is exposed under a different exact model ID, use that exact model ID.
 
 ### Ingest does not include PDFs or scans
 
@@ -877,7 +867,7 @@ The current loader indexes text-like files only. Extract PDFs/scans into markdow
 
 ### Hermes Docker backend cannot run the full stack
 
-This is expected in the current environment. The Docker-backed Hermes tools may see `/gdrive/hermes-brain`, but not the Mac host vault `/Users/denishlinka/hermes`, and may not have Docker access. Run Qdrant, Ollama, ingestion, and query verification on the Mac host.
+This is expected in the current environment. The Docker-backed Hermes tools may see `/gdrive/hermes-brain`, but not the Mac host vault `/Users/denishlinka/hermes/brain`, and may not have Docker access. Run Qdrant, Ollama, ingestion, and query verification on the Mac host.
 
 ## Operating principle
 
