@@ -11,6 +11,8 @@ def test_defaults():
     assert s.llm_model == "gpt-5.5"
     assert s.book_paths == ""
     assert s.book_pages_per_chunk == 3
+    assert s.obsidian_core_enabled is False
+    assert s.obsidian_core_path == ""
     assert s.auto_context_enabled is True
 
 

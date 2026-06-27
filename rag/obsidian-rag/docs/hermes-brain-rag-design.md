@@ -15,6 +15,16 @@ The retrieval layer must be fast, grounded, and rebuildable. Qdrant is a cache, 
 
 Retrieval priority for answers is `wiki` first, then `raw`/vault notes, then `book`/Drive chunks. Book chunks are still valuable evidence, especially when the compiled wiki has no page-level detail yet.
 
+## Obsidian intelligence core boundary
+
+Hermes Brain consumes Obsidian Markdown intelligence through the generic `/workspace/obsidian-intelligence-core` parser/adapter instead of inventing Obsidian mechanics inside `deep_notes.ingest`.
+
+- Generic core owns read-only Obsidian mechanics: frontmatter/properties, wikilinks, embeds, aliases, headings, block IDs, callouts, graph edges, diagnostics, and deterministic inert payloads.
+- Hermes Brain owns source roots, source-layer semantics (`wiki`, `raw`, `vault`, `drive`, `book`), LlamaIndex/Qdrant indexing, citation formatting, API endpoints, and Hermes plugin integration.
+- `deep_notes.obsidian_core_adapter` is the thin consumer boundary: it lazily imports the core parser, converts the core Hermes Brain payload into `llama_index.core.Document`, and excludes structural Obsidian metadata from embedding/LLM text while keeping it in Qdrant payload metadata.
+- `OBSIDIAN_CORE_ENABLED=false` by default preserves the legacy ingest path. Set `OBSIDIAN_CORE_ENABLED=true` only when `obsidian-intelligence-core` is importable or `OBSIDIAN_CORE_PATH` points at its `src/` checkout.
+- Qdrant remains a derived cache. Neither the core adapter nor RAG ingest writes to the live Obsidian vault or Google Drive.
+
 ## Book ingest algorithm
 
 Books are configured with `BOOK_PATHS`, a comma-separated list of files or directories. Supported formats:
@@ -158,6 +168,8 @@ AUTO_CONTEXT_ENABLED=true
 AUTO_CONTEXT_TOP_K=5
 AUTO_CONTEXT_MIN_SCORE=0.55
 AUTO_CONTEXT_MAX_CHARS=3500
+OBSIDIAN_CORE_ENABLED=true
+OBSIDIAN_CORE_PATH=/workspace/obsidian-intelligence-core/src
 HERMES_BRAIN_RAG_CONTEXT_URL=http://127.0.0.1:8000/api/context
 HERMES_BRAIN_RAG_API_KEY=<same value as API_KEY, keep secret>
 HERMES_BRAIN_RAG_TIMEOUT=2.5
@@ -169,8 +181,9 @@ HERMES_BRAIN_RAG_TIMEOUT=2.5
 2. Ollama has `bge-m3`.
 3. `BOOK_PATHS` contains at least one extracted book/PDF visible to this runtime.
 4. `python -m deep_notes.book_index` prints section/page entries.
-5. `python -m deep_notes.ingest` indexes vault/source/book docs.
-6. `python -m deep_notes.hermes_context "linear regression"` returns context with book/page citations.
-7. `/api/context` returns the same page-cited context when called with the configured API key.
-8. The plugin `pre_llm_call` hook returns `{ "context": ... }` for that API response and fails closed on API errors.
-9. A negative query returns empty context or an explicit insufficient-context answer.
+5. With `OBSIDIAN_CORE_ENABLED=true`, a fixture Markdown note ingests through `obsidian-intelligence-core` and carries both legacy Hermes metadata and Obsidian-native metadata.
+6. `python -m deep_notes.ingest` indexes vault/source/book docs.
+7. `python -m deep_notes.hermes_context "linear regression"` returns context with book/page citations.
+8. `/api/context` returns the same page-cited context when called with the configured API key.
+9. The plugin `pre_llm_call` hook returns `{ "context": ... }` for that API response and fails closed on API errors.
+10. A negative query returns empty context or an explicit insufficient-context answer.

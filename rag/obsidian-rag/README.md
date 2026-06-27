@@ -148,6 +148,8 @@ All settings can come from OS environment variables, the ignored project file `d
 | `VAULT_PATH` | `/Users/denishlinka/hermes/brain` | Mac-host vault path. Leave empty in Hermes Docker unless that path is mounted. |
 | `SOURCE_PATHS` | `/gdrive/hermes-brain` | Comma-separated extra text/extracted source roots. |
 | `BOOK_PATHS` | `/gdrive/hermes-brain/books,/gdrive/hermes-brain/pdf-docs` | Comma-separated book/PDF roots. |
+| `OBSIDIAN_CORE_ENABLED` | `false` | Enable the generic `obsidian-intelligence-core` Markdown parser/adapter for `.md`/`.markdown` ingest. |
+| `OBSIDIAN_CORE_PATH` | unset; auto-detects `/workspace/obsidian-intelligence-core/src` when present | Optional source checkout path when the core package is not installed in the active RAG environment. |
 | `EMBED_PROVIDER` | `ollama` | `ollama`, `openai` |
 | `EMBED_MODEL` | `bge-m3` | Changing this requires rebuilding Qdrant. |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Use `http://host.docker.internal:11434` from Hermes Docker. |
@@ -177,6 +179,7 @@ obsidian-rag/
 │   │   ├── llm.py            # LLM factory
 │   │   └── chunking.py       # Chunking strategy factory
 │   ├── ingest.py             # Vault loading + ingestion pipeline
+│   ├── obsidian_core_adapter.py # Thin consumer of obsidian-intelligence-core parser output
 │   ├── query.py              # Retrieval + answer generation
 │   ├── app.py                # Streamlit UI
 │   └── api.py                # FastAPI server
@@ -184,6 +187,10 @@ obsidian-rag/
 ├── docker-compose.yml        # Qdrant
 └── README.md
 ```
+
+### Obsidian intelligence core integration
+
+When `OBSIDIAN_CORE_ENABLED=true`, Markdown notes are parsed through `/workspace/obsidian-intelligence-core` and converted through its Hermes Brain adapter before indexing. The generic core owns Obsidian mechanics such as wikilinks, embeds, aliases, headings, block IDs, callouts, and diagnostics. This RAG app owns source layers (`wiki`, `raw`, `vault`, `drive`, `book`), LlamaIndex/Qdrant indexing, citations, API endpoints, and Hermes plugin integration. Qdrant remains a derived cache; ingest does not write to the live vault or Google Drive.
 
 ---
 

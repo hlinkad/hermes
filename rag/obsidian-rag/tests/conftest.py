@@ -23,6 +23,7 @@ _ENV_PREFIXES = (
     "LLM_",
     "SIMILARITY_",
     "AUTO_CONTEXT_",
+    "OBSIDIAN_CORE_",
 )
 
 

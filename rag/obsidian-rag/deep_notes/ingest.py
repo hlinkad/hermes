@@ -9,6 +9,7 @@ from deep_notes.components.chunking import get_splitter
 from deep_notes.components.embeddings import get_embed_model
 from deep_notes.components.vector_store import get_vector_store
 from deep_notes.config import Settings, get_settings
+from deep_notes.obsidian_core_adapter import document_from_obsidian_core
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 TEXT_EXTENSIONS = {
@@ -77,14 +78,29 @@ def iter_text_files(root: Path, extensions: set[str]) -> list[Path]:
     return files
 
 
-def document_from_file(path: Path, root: Path, source_kind: str) -> Document | None:
+def document_from_file(
+    path: Path,
+    root: Path,
+    source_kind: str,
+    *,
+    use_obsidian_core: bool = False,
+    obsidian_core_path: str = "",
+) -> Document | None:
+    rel = path.relative_to(root)
+    layer = infer_layer(rel, source_kind)
+    if use_obsidian_core and path.suffix.lower() in {".md", ".markdown"}:
+        return document_from_obsidian_core(
+            path,
+            root,
+            source_kind=source_kind,
+            layer=layer,
+            obsidian_core_path=obsidian_core_path,
+        )
+
     text = path.read_text(encoding="utf-8", errors="replace")
     meta, body = parse_frontmatter(text)
     if not body.strip():
         return None
-
-    rel = path.relative_to(root)
-    layer = infer_layer(rel, source_kind)
 
     doc_meta = {
         "file_name": path.name,
@@ -111,7 +127,12 @@ def document_from_file(path: Path, root: Path, source_kind: str) -> Document | N
     return Document(text=body, metadata=doc_meta)
 
 
-def load_vault(vault_path: str) -> list[Document]:
+def load_vault(
+    vault_path: str,
+    *,
+    use_obsidian_core: bool = False,
+    obsidian_core_path: str = "",
+) -> list[Document]:
     """Load all .md files from an Obsidian vault directory."""
     vault = Path(vault_path).expanduser()
     if not vault.is_dir():
@@ -119,13 +140,24 @@ def load_vault(vault_path: str) -> list[Document]:
 
     documents: list[Document] = []
     for md_file in iter_text_files(vault, {".md", ".markdown"}):
-        doc = document_from_file(md_file, vault, source_kind="vault")
+        doc = document_from_file(
+            md_file,
+            vault,
+            source_kind="vault",
+            use_obsidian_core=use_obsidian_core,
+            obsidian_core_path=obsidian_core_path,
+        )
         if doc:
             documents.append(doc)
     return documents
 
 
-def load_source_root(source_path: str) -> list[Document]:
+def load_source_root(
+    source_path: str,
+    *,
+    use_obsidian_core: bool = False,
+    obsidian_core_path: str = "",
+) -> list[Document]:
     """Load text/extracted files from a Drive/source root.
 
     Binary originals stay in Google Drive but must be OCR/extracted before this loader can index them.
@@ -136,7 +168,13 @@ def load_source_root(source_path: str) -> list[Document]:
 
     documents: list[Document] = []
     for text_file in iter_text_files(root, TEXT_EXTENSIONS):
-        doc = document_from_file(text_file, root, source_kind="drive")
+        doc = document_from_file(
+            text_file,
+            root,
+            source_kind="drive",
+            use_obsidian_core=use_obsidian_core,
+            obsidian_core_path=obsidian_core_path,
+        )
         if doc:
             documents.append(doc)
     return documents
@@ -151,13 +189,21 @@ def load_documents(config: Settings) -> list[Document]:
 
     if config.vault_path:
         print(f"Loading Obsidian vault from: {config.vault_path}")
-        vault_docs = load_vault(config.vault_path)
+        vault_docs = load_vault(
+            config.vault_path,
+            use_obsidian_core=config.obsidian_core_enabled,
+            obsidian_core_path=config.obsidian_core_path,
+        )
         print(f"Found {len(vault_docs)} vault documents")
         documents.extend(vault_docs)
 
     for source_path in configured_source_paths(config):
         print(f"Loading source root from: {source_path}")
-        source_docs = load_source_root(source_path)
+        source_docs = load_source_root(
+            source_path,
+            use_obsidian_core=config.obsidian_core_enabled,
+            obsidian_core_path=config.obsidian_core_path,
+        )
         print(f"Found {len(source_docs)} source documents in {source_path}")
         documents.extend(source_docs)
 
