@@ -22,7 +22,7 @@ Hermes Brain consumes Obsidian Markdown intelligence through the generic `/works
 - Generic core owns read-only Obsidian mechanics: frontmatter/properties, wikilinks, embeds, aliases, headings, block IDs, callouts, graph edges, diagnostics, and deterministic inert payloads.
 - Hermes Brain owns source roots, source-layer semantics (`wiki`, `raw`, `vault`, `drive`, `book`), LlamaIndex/Qdrant indexing, citation formatting, API endpoints, and Hermes plugin integration.
 - `deep_notes.obsidian_core_adapter` is the thin consumer boundary: it lazily imports the core parser, converts the core Hermes Brain payload into `llama_index.core.Document`, and excludes structural Obsidian metadata from embedding/LLM text while keeping it in Qdrant payload metadata.
-- `OBSIDIAN_CORE_ENABLED=false` by default preserves the legacy ingest path. Set `OBSIDIAN_CORE_ENABLED=true` only when `obsidian-intelligence-core` is importable or `OBSIDIAN_CORE_PATH` points at its `src/` checkout.
+- `OBSIDIAN_CORE_ENABLED=false` by default preserves the legacy ingest path. Set `OBSIDIAN_CORE_ENABLED=true` only when `obsidian-intelligence-core` is importable or `OBSIDIAN_CORE_PATH` points at its repository root or `src/` checkout; explicit paths are validated before import resolution.
 - Qdrant remains a derived cache. Neither the core adapter nor RAG ingest writes to the live Obsidian vault or Google Drive.
 
 ## Book ingest algorithm

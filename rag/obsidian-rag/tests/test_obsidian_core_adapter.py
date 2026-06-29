@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 from llama_index.core.schema import MetadataMode
 
-from deep_notes.ingest import load_source_root, load_vault
+from deep_notes.config import Settings
+from deep_notes.ingest import load_documents, load_source_root, load_vault
 from deep_notes.obsidian_core_adapter import (
     OBSIDIAN_STRUCTURAL_METADATA_KEYS,
+    _ensure_core_path,
     document_from_obsidian_core,
 )
 
@@ -166,6 +169,58 @@ def test_load_source_root_uses_core_for_markdown_and_preserves_drive_layers(
     assert by_name["plain.txt"].metadata["layer"] == "drive"
 
 
+def test_load_documents_respects_disabled_feature_gate_for_compound_note(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "note.md").write_text(_compound_note(), encoding="utf-8")
+
+    docs = load_documents(
+        Settings(
+            vault_path=str(vault),
+            obsidian_core_enabled=False,
+            obsidian_core_path=str(tmp_path / "missing-core-src"),
+        )
+    )
+
+    assert len(docs) == 1
+    assert docs[0].metadata["file_name"] == "note.md"
+    assert docs[0].metadata["source_kind"] == "vault"
+    assert docs[0].metadata["layer"] == "vault"
+    assert docs[0].metadata["tags"] == ["brain", "rag"]
+    assert docs[0].metadata["title"] == "Core Adapter Note"
+    assert "aliases" not in docs[0].metadata
+    assert "obsidian_summary" not in docs[0].metadata
+
+
+def test_load_documents_routes_enabled_markdown_vault_notes_through_core(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    wiki.mkdir(parents=True)
+    (wiki / "note.md").write_text(_compound_note(), encoding="utf-8")
+
+    docs = load_documents(
+        Settings(
+            vault_path=str(vault),
+            obsidian_core_enabled=True,
+            obsidian_core_path=str(CORE_SRC),
+        )
+    )
+
+    assert len(docs) == 1
+    assert docs[0].metadata["file_name"] == "note.md"
+    assert docs[0].metadata["file_path"] == "wiki/note.md"
+    assert docs[0].metadata["source_kind"] == "vault"
+    assert docs[0].metadata["layer"] == "wiki"
+    assert docs[0].metadata["aliases"] == ["Adapter Alias"]
+    assert docs[0].metadata["obsidian_summary"] == {
+        "links": 1,
+        "embeds": 1,
+        "headings": 2,
+        "blocks": 1,
+        "callouts": 1,
+    }
+
+
 def test_core_enabled_fails_loudly_when_core_cannot_be_imported(tmp_path: Path) -> None:
     note = tmp_path / "note.md"
     note.write_text("Body\n", encoding="utf-8")
@@ -177,4 +232,61 @@ def test_core_enabled_fails_loudly_when_core_cannot_be_imported(tmp_path: Path) 
             source_kind="vault",
             layer="vault",
             obsidian_core_path=str(tmp_path / "missing-core-src"),
+        )
+
+
+def test_explicit_core_path_must_be_the_core_checkout(tmp_path: Path) -> None:
+    wrong_src = tmp_path / "not-core-src"
+    wrong_src.mkdir()
+
+    with pytest.raises(RuntimeError, match="required core modules"):
+        _ensure_core_path(str(wrong_src))
+
+
+def test_explicit_core_path_rejects_malformed_core_package(tmp_path: Path) -> None:
+    malformed_src = tmp_path / "src"
+    (malformed_src / "obsidian_intelligence_core").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="required core modules"):
+        _ensure_core_path(str(malformed_src))
+
+
+def test_explicit_core_path_accepts_core_repo_root() -> None:
+    _ensure_core_path(str(CORE_SRC.parent))
+    assert str(CORE_SRC) in sys.path
+
+
+def test_explicit_core_path_does_not_fall_through_to_preloaded_package(
+    tmp_path: Path,
+) -> None:
+    real_note = tmp_path / "real.md"
+    real_note.write_text("Real body\n", encoding="utf-8")
+    assert document_from_obsidian_core(
+        real_note,
+        tmp_path,
+        source_kind="vault",
+        layer="vault",
+        obsidian_core_path=str(CORE_SRC),
+    ) is not None
+
+    fake_src = tmp_path / "fake-core" / "src"
+    for relative_file in (
+        "obsidian_intelligence_core/__init__.py",
+        "obsidian_intelligence_core/core/markdown.py",
+        "obsidian_intelligence_core/adapters/hermes_brain/__init__.py",
+    ):
+        file_path = fake_src / relative_file
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("# fake module\n", encoding="utf-8")
+
+    fake_note = tmp_path / "fake.md"
+    fake_note.write_text("Fake body\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="resolved outside OBSIDIAN_CORE_PATH"):
+        document_from_obsidian_core(
+            fake_note,
+            tmp_path,
+            source_kind="vault",
+            layer="vault",
+            obsidian_core_path=str(fake_src),
         )

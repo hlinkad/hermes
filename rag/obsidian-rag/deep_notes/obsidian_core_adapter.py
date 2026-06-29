@@ -35,6 +35,11 @@ _CORE_SRC_CANDIDATES = (
     Path("/workspace/obsidian-intelligence-core/src"),
     Path("/Users/denishlinka/hermes-infra/obsidian-intelligence-core/src"),
 )
+_REQUIRED_CORE_FILES = (
+    "obsidian_intelligence_core/__init__.py",
+    "obsidian_intelligence_core/core/markdown.py",
+    "obsidian_intelligence_core/adapters/hermes_brain/__init__.py",
+)
 
 
 def document_from_obsidian_core(
@@ -70,7 +75,7 @@ def document_from_obsidian_core(
 
 
 def _load_core_adapter(obsidian_core_path: str) -> tuple[Callable, Callable]:
-    _ensure_core_path(obsidian_core_path)
+    core_src_path = _ensure_core_path(obsidian_core_path)
     try:
         from obsidian_intelligence_core.adapters.hermes_brain import (  # type: ignore[import-not-found]
             document_to_hermes_brain_rag_payload,
@@ -81,34 +86,91 @@ def _load_core_adapter(obsidian_core_path: str) -> tuple[Callable, Callable]:
     except ImportError as exc:  # pragma: no cover - exercised through RuntimeError path
         raise RuntimeError(
             "obsidian-intelligence-core is required when OBSIDIAN_CORE_ENABLED=true. "
-            "Install it in the active RAG environment or set OBSIDIAN_CORE_PATH to its src/ "
-            "checkout; do not create/install a new venv without approval."
+            "Install it in the active RAG environment or set OBSIDIAN_CORE_PATH to the "
+            "core repo root or src/ checkout; do not create/install a new venv without "
+            "approval."
         ) from exc
+
+    if core_src_path is not None:
+        _assert_callable_loaded_from_core_path(parse_markdown_file, core_src_path)
+        _assert_callable_loaded_from_core_path(
+            document_to_hermes_brain_rag_payload,
+            core_src_path,
+        )
     return parse_markdown_file, document_to_hermes_brain_rag_payload
 
 
-def _ensure_core_path(obsidian_core_path: str) -> None:
+def _ensure_core_path(obsidian_core_path: str) -> Path | None:
     explicit_path = obsidian_core_path.strip()
     if explicit_path:
-        path = Path(explicit_path).expanduser()
-        if not path.is_dir():
-            raise RuntimeError(
-                f"obsidian-intelligence-core path does not exist: {path}. "
-                "Set OBSIDIAN_CORE_PATH to the checkout's src/ directory."
-            )
+        path = _validated_core_src_path(Path(explicit_path).expanduser())
         _prepend_sys_path(path)
-        return
+        return path
 
     try:
         import obsidian_intelligence_core  # noqa: F401  # type: ignore[import-not-found]
-        return
+        return None
     except ImportError:
         pass
 
     for candidate in _CORE_SRC_CANDIDATES:
-        if candidate.is_dir():
+        if candidate.is_dir() and _has_required_core_files(candidate):
             _prepend_sys_path(candidate)
-            return
+            return candidate.resolve()
+    return None
+
+
+def _validated_core_src_path(path: Path) -> Path:
+    """Return a safe core src path or fail before Python import resolution.
+
+    Explicit OBSIDIAN_CORE_PATH should not silently fall through to another installed
+    package or auto-detected checkout. Accept either the core repo root or its src/
+    directory, but require the expected package directory to exist there.
+    """
+
+    if not path.is_dir():
+        raise RuntimeError(
+            f"obsidian-intelligence-core path does not exist: {path}. "
+            "Set OBSIDIAN_CORE_PATH to the core repo root or src/ directory."
+        )
+
+    if _has_required_core_files(path):
+        return path.resolve()
+
+    repo_src = path / "src"
+    if _has_required_core_files(repo_src):
+        return repo_src.resolve()
+
+    raise RuntimeError(
+        f"obsidian-intelligence-core path does not contain required core modules: {path}. "
+        "Set OBSIDIAN_CORE_PATH to the core repo root or src/ directory."
+    )
+
+
+def _has_required_core_files(path: Path) -> bool:
+    return all((path / relative_file).is_file() for relative_file in _REQUIRED_CORE_FILES)
+
+
+def _assert_callable_loaded_from_core_path(func: Callable, core_src_path: Path) -> None:
+    module_name = getattr(func, "__module__", "")
+    module = sys.modules.get(module_name)
+    origin = getattr(module, "__file__", "") if module is not None else ""
+    if not origin:
+        raise RuntimeError(
+            "obsidian-intelligence-core import origin could not be verified for "
+            f"{module_name or func!r}."
+        )
+
+    origin_path = Path(origin).resolve()
+    core_root = core_src_path.resolve()
+    try:
+        origin_path.relative_to(core_root)
+    except ValueError as exc:
+        raise RuntimeError(
+            "obsidian-intelligence-core import resolved outside OBSIDIAN_CORE_PATH: "
+            f"{origin_path} is not under {core_root}. Restart the process or unset "
+            "the conflicting package before enabling OBSIDIAN_CORE_PATH."
+        ) from exc
 
 
 def _prepend_sys_path(path: Path) -> None:

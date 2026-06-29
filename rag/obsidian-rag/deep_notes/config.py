@@ -44,8 +44,8 @@ class Settings(BaseSettings):
     book_pages_per_chunk: int = 3
     # Feature gate for the generic obsidian-intelligence-core parser/adapter.
     # Keep disabled by default so existing ingest continues to work unless the
-    # core package is installed/importable or OBSIDIAN_CORE_PATH points at a src/
-    # checkout.
+    # core package is installed/importable or OBSIDIAN_CORE_PATH points at the
+    # core repo root or src/ checkout.
     obsidian_core_enabled: bool = False
     obsidian_core_path: str = ""
 
