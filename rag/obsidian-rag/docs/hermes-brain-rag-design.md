@@ -19,9 +19,9 @@ Retrieval priority for answers is `wiki` first, then `raw`/vault notes, then `bo
 
 Hermes Brain consumes Obsidian Markdown intelligence through the generic `/workspace/obsidian-intelligence-core` parser/adapter instead of inventing Obsidian mechanics inside `deep_notes.ingest`.
 
-- Generic core owns read-only Obsidian mechanics: frontmatter/properties, wikilinks, embeds, aliases, headings, block IDs, callouts, graph edges, diagnostics, and deterministic inert payloads.
+- Generic core owns read-only Obsidian mechanics: frontmatter/properties, wikilinks, embeds, aliases, headings, block IDs, callouts, graph edges, diagnostics, future canvas/base reference fields when the core exposes them, and deterministic inert payloads.
 - Hermes Brain owns source roots, source-layer semantics (`wiki`, `raw`, `vault`, `drive`, `book`), LlamaIndex/Qdrant indexing, citation formatting, API endpoints, and Hermes plugin integration.
-- `deep_notes.obsidian_core_adapter` is the thin consumer boundary: it lazily imports the core parser, converts the core Hermes Brain payload into `llama_index.core.Document`, and excludes structural Obsidian metadata from embedding/LLM text while keeping it in Qdrant payload metadata.
+- `deep_notes.obsidian_core_adapter` is the thin consumer boundary: it lazily imports the core parser, converts the core Hermes Brain payload into `llama_index.core.Document`, omits/redacts secret-shaped or copied request metadata, and excludes structural Obsidian metadata from embedding/LLM text while keeping safe structure in Qdrant payload metadata. The same Qdrant metadata sanitizer is also applied to legacy frontmatter-derived provenance fields when the core feature gate is disabled.
 - `OBSIDIAN_CORE_ENABLED=false` by default preserves the legacy ingest path. Set `OBSIDIAN_CORE_ENABLED=true` only when `obsidian-intelligence-core` is importable or `OBSIDIAN_CORE_PATH` points at its repository root or `src/` checkout; explicit paths are validated before import resolution.
 - Qdrant remains a derived cache. Neither the core adapter nor RAG ingest writes to the live Obsidian vault or Google Drive.
 
@@ -181,7 +181,7 @@ HERMES_BRAIN_RAG_TIMEOUT=2.5
 2. Ollama has `bge-m3`.
 3. `BOOK_PATHS` contains at least one extracted book/PDF visible to this runtime.
 4. `python -m deep_notes.book_index` prints section/page entries.
-5. With `OBSIDIAN_CORE_ENABLED=true`, a fixture Markdown note ingests through `obsidian-intelligence-core` and carries both legacy Hermes metadata and Obsidian-native metadata.
+5. With `OBSIDIAN_CORE_ENABLED=true`, a fixture Markdown note ingests through `obsidian-intelligence-core` and carries both legacy Hermes metadata and Obsidian-native metadata through the LlamaIndex node metadata that backs Qdrant payloads; copied secrets/request headers are omitted or redacted before storage.
 6. `python -m deep_notes.ingest` indexes vault/source/book docs.
 7. `python -m deep_notes.hermes_context "linear regression"` returns context with book/page citations.
 8. `/api/context` returns the same page-cited context when called with the configured API key.

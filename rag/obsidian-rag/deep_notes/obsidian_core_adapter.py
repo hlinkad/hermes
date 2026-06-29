@@ -7,13 +7,17 @@ retrieval/citation behavior.
 """
 from __future__ import annotations
 
+import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+from urllib.parse import unquote
 
 from llama_index.core import Document
 
 OBSIDIAN_STRUCTURAL_METADATA_KEYS = (
+    "obsidian_metadata_schema",
     "frontmatter",
     "properties",
     "aliases",
@@ -27,9 +31,97 @@ OBSIDIAN_STRUCTURAL_METADATA_KEYS = (
     "block_ids",
     "callouts",
     "graph_edges",
+    "canvas_refs",
+    "canvas_references",
+    "base_refs",
+    "base_references",
     "diagnostics",
     "obsidian_summary",
 )
+
+_SENSITIVE_METADATA_KEY_TOKENS = {
+    "jwt",
+    "signature",
+    "auth",
+    "authorization",
+    "cookie",
+    "cookies",
+    "credential",
+    "credentials",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+}
+_SENSITIVE_METADATA_KEY_PHRASES = (
+    ("api", "key"),
+    ("api", "token"),
+    ("x", "api", "key"),
+    ("access", "key"),
+    ("secret", "access", "key"),
+    ("private", "key"),
+    ("signing", "key"),
+    ("access", "token"),
+    ("refresh", "token"),
+    ("id", "token"),
+    ("bearer", "token"),
+    ("basic", "auth"),
+    ("client", "secret"),
+    ("session", "id"),
+    ("session", "token"),
+)
+_COMPACT_SENSITIVE_KEY_FRAGMENTS = (
+    "apikey",
+    "apitoken",
+    "accesskey",
+    "secretaccesskey",
+    "accesstoken",
+    "refreshtoken",
+    "idtoken",
+    "bearertoken",
+    "clientsecret",
+    "sessionid",
+    "sessiontoken",
+    "privatekey",
+    "signingkey",
+)
+_UNSAFE_REQUEST_METADATA_KEYS = {
+    "headers",
+    "header",
+    "request_headers",
+    "request_header",
+    "response_headers",
+    "response_header",
+    "http_headers",
+    "http_header",
+    "cookies",
+    "set_cookie",
+    "request",
+    "response",
+}
+_AUTHORIZATION_VALUE_RE = re.compile(
+    r"(?i)\b(authorization)(\s*[:=]\s*)(?:(?:bearer|basic|digest|token)\s+)?"
+    r"(\"[^\"]*\"|'[^']*'|[^\s&#;,}}\]\[]+)"
+    r"|\b(authorization)(\s+)(?:bearer|basic|digest|token)\s+"
+    r"(\"[^\"]*\"|'[^']*'|[^\s&#;,}}\]\[]+)"
+)
+_METADATA_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b([a-z][a-z0-9_.-]{0,100})(['\"]?\s*[:=]\s*)"
+    r"(\"[^\"]*\"|'[^']*'|[^\s&#;,}}\]\[]+)"
+)
+_SPACED_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"api\s+key|x\s+api\s+key|api\s+token|access\s+key|"
+    r"secret\s+access\s+key|private\s+key|signing\s+key|"
+    r"access\s+token|refresh\s+token|id\s+token|bearer\s+token|"
+    r"client\s+secret|session\s+(?:id|token)|basic\s+auth"
+    r")(\s*[:=]\s*)"
+    r"(\"[^\"]*\"|'[^']*'|[^\s&#;,}}\]\[]+)"
+)
+_BEARER_SECRET_RE = re.compile(r"(?i)\b(bearer)\s+([^\s&#;,]+)")
+_ACRONYM_BOUNDARY_RE = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 _CORE_SRC_CANDIDATES = (
     Path("/workspace/obsidian-intelligence-core/src"),
@@ -68,10 +160,153 @@ def document_from_obsidian_core(
     )
     return Document(
         text=payload.text,
-        metadata=dict(payload.metadata),
+        metadata=qdrant_safe_metadata(payload.metadata),
         excluded_embed_metadata_keys=list(OBSIDIAN_STRUCTURAL_METADATA_KEYS),
         excluded_llm_metadata_keys=list(OBSIDIAN_STRUCTURAL_METADATA_KEYS),
     )
+
+
+def qdrant_safe_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Return JSON-compatible metadata safe to store in Qdrant payloads.
+
+    Obsidian frontmatter/properties can contain arbitrary user-authored keys and
+    copied request diagnostics. The live Qdrant collection is a derived cache, but
+    it should still preserve only safe retrieval/debugging metadata: secret-shaped
+    keys and HTTP request/response containers are omitted, while sensitive tokens in
+    otherwise useful strings (for example source URLs) are redacted.
+    """
+
+    sanitized: dict[str, Any] = {}
+    for key, value in metadata.items():
+        key_text = str(key)
+        if not _is_safe_metadata_key(key_text):
+            continue
+        sanitized[key_text] = _sanitize_metadata_value(value)
+    return sanitized
+
+
+def _sanitize_metadata_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return qdrant_safe_metadata(value)
+    if isinstance(value, tuple):
+        return [_sanitize_metadata_value(item) for item in value]
+    if isinstance(value, list):
+        return [_sanitize_metadata_value(item) for item in value]
+    if isinstance(value, str):
+        return _redact_sensitive_text(value)
+    return value
+
+
+def _is_safe_metadata_key(key: str) -> bool:
+    canonical = _canonical_metadata_key(key)
+    if not canonical:
+        return False
+    if (
+        canonical in _UNSAFE_REQUEST_METADATA_KEYS
+        or canonical.endswith("_headers")
+        or canonical.endswith("_header")
+    ):
+        return False
+    return not _is_sensitive_metadata_key(canonical)
+
+
+def _canonical_metadata_key(key: str) -> str:
+    decoded = unquote(str(key))
+    decoded = _ACRONYM_BOUNDARY_RE.sub("_", decoded)
+    decoded = _CAMEL_BOUNDARY_RE.sub("_", decoded)
+    normalized = _NON_ALNUM_RE.sub("_", decoded.lower())
+    return normalized.strip("_")
+
+
+def _is_sensitive_metadata_key(canonical_key: str) -> bool:
+    compact_key = canonical_key.replace("_", "")
+    if any(fragment in compact_key for fragment in _COMPACT_SENSITIVE_KEY_FRAGMENTS):
+        return True
+
+    tokens = [token for token in canonical_key.split("_") if token]
+    if canonical_key == "apikey" or any(
+        token in _SENSITIVE_METADATA_KEY_TOKENS for token in tokens
+    ):
+        return True
+    return any(
+        _contains_token_phrase(tokens, phrase)
+        for phrase in _SENSITIVE_METADATA_KEY_PHRASES
+    )
+
+
+def _contains_token_phrase(tokens: list[str], phrase: tuple[str, ...]) -> bool:
+    if len(tokens) < len(phrase):
+        return False
+    last_start = len(tokens) - len(phrase) + 1
+    return any(
+        tuple(tokens[start : start + len(phrase)]) == phrase
+        for start in range(last_start)
+    )
+
+
+def _redact_authorization_value(match: re.Match[str]) -> str:
+    key = match.group(1) or match.group(4)
+    separator = match.group(2) or match.group(5)
+    return f"{key}{separator}[redacted]"
+
+
+def _redact_sensitive_assignment(match: re.Match[str]) -> str:
+    key = match.group(1).strip(" '\"")
+    if _is_sensitive_metadata_key(_canonical_metadata_key(key)):
+        return f"{match.group(1)}{match.group(2)}[redacted]"
+    return match.group(0)
+
+
+def _redact_spaced_sensitive_assignment(match: re.Match[str]) -> str:
+    return f"{match.group(1)}{match.group(2)}[redacted]"
+
+
+def _redact_sensitive_text(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+
+    if "://" in text:
+        scheme, remainder = text.split("://", 1)
+        authority, separator, tail = remainder.partition("/")
+        if "@" in authority:
+            authority = "[redacted]@" + authority.rsplit("@", 1)[1]
+        text = f"{scheme}://{authority}{separator}{tail}"
+
+    prefix, question, query_and_fragment = text.partition("?")
+    if question:
+        query, fragment_separator, fragment = query_and_fragment.partition("#")
+        redacted_query = _redact_parameter_segment(query)
+        redacted_fragment = _redact_parameter_segment(fragment)
+        text = f"{prefix}?{redacted_query}{fragment_separator}{redacted_fragment}"
+    else:
+        prefix, fragment_separator, fragment = text.partition("#")
+        if fragment_separator:
+            text = f"{prefix}#{_redact_parameter_segment(fragment)}"
+
+    text = _AUTHORIZATION_VALUE_RE.sub(_redact_authorization_value, text)
+    text = _BEARER_SECRET_RE.sub(lambda match: f"{match.group(1)} [redacted]", text)
+    text = _SPACED_SENSITIVE_ASSIGNMENT_RE.sub(
+        _redact_spaced_sensitive_assignment,
+        text,
+    )
+    return _METADATA_ASSIGNMENT_RE.sub(_redact_sensitive_assignment, text)
+
+
+def _redact_parameter_segment(segment: str) -> str:
+    if not segment:
+        return segment
+    redacted_params: list[str] = []
+    for param in segment.split("&"):
+        name, equals, raw_value = param.partition("=")
+        if _is_sensitive_metadata_key(_canonical_metadata_key(name)):
+            if equals:
+                redacted_params.append(f"{name}{equals}[redacted]")
+            else:
+                redacted_params.append(f"{name}=[redacted]")
+        else:
+            redacted_params.append(f"{name}{equals}{raw_value}")
+    return "&".join(redacted_params)
 
 
 def _load_core_adapter(obsidian_core_path: str) -> tuple[Callable, Callable]:

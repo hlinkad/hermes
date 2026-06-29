@@ -190,7 +190,13 @@ obsidian-rag/
 
 ### Obsidian intelligence core integration
 
-When `OBSIDIAN_CORE_ENABLED=true`, Markdown notes are parsed through the installed `obsidian-intelligence-core` package or a validated local checkout (`OBSIDIAN_CORE_PATH`, repo root or `src/`) and converted through its Hermes Brain adapter before indexing. The generic core owns Obsidian mechanics such as wikilinks, embeds, aliases, headings, block IDs, callouts, and diagnostics. This RAG app owns source layers (`wiki`, `raw`, `vault`, `drive`, `book`), LlamaIndex/Qdrant indexing, citations, API endpoints, and Hermes plugin integration. Qdrant remains a derived cache; ingest does not write to the live vault or Google Drive.
+When `OBSIDIAN_CORE_ENABLED=true`, Markdown notes are parsed through the installed `obsidian-intelligence-core` package or a validated local checkout (`OBSIDIAN_CORE_PATH`, repo root or `src/`) and converted through its Hermes Brain adapter before indexing. The generic core owns Obsidian mechanics such as wikilinks, embeds, aliases, headings, block IDs, callouts, graph edges, diagnostics, and future canvas/base reference fields exposed through the core payload. This RAG app owns source layers (`wiki`, `raw`, `vault`, `drive`, `book`), LlamaIndex/Qdrant indexing, citations, API endpoints, and Hermes plugin integration. Qdrant remains a derived cache; ingest does not write to the live vault or Google Drive.
+
+Qdrant payload metadata intentionally keeps both legacy Hermes fields and Obsidian-native structure:
+
+- Legacy/provenance fields: `file_name`, `file_path`, `source_root`, `source_kind`, `layer`, `title`, `tags`, and `sources`.
+- Obsidian-native fields: `obsidian_metadata_schema`, sanitized `frontmatter`/`properties`, `aliases`, `cssclasses`, `inline_tags`, `headings`, `links`/`wikilinks`, `embeds`, `blocks`, `block_ids`, `callouts`, `graph_edges`, future core-emitted `canvas_refs`/`base_refs` (or `*_references` variants), `diagnostics`, and `obsidian_summary`.
+- Secret-shaped metadata keys and copied request/response containers such as `api_key`, tokens, cookies, passwords, `headers`, `request_headers`, and `response_headers` are omitted before metadata can reach the Qdrant payload; sensitive tokens inside otherwise useful URLs/strings are redacted.
 
 ---
 

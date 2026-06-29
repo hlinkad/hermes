@@ -9,7 +9,10 @@ from deep_notes.components.chunking import get_splitter
 from deep_notes.components.embeddings import get_embed_model
 from deep_notes.components.vector_store import get_vector_store
 from deep_notes.config import Settings, get_settings
-from deep_notes.obsidian_core_adapter import document_from_obsidian_core
+from deep_notes.obsidian_core_adapter import (
+    document_from_obsidian_core,
+    qdrant_safe_metadata,
+)
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 TEXT_EXTENSIONS = {
@@ -124,7 +127,7 @@ def document_from_file(
     if sources:
         doc_meta["sources"] = sources
 
-    return Document(text=body, metadata=doc_meta)
+    return Document(text=body, metadata=qdrant_safe_metadata(doc_meta))
 
 
 def load_vault(
