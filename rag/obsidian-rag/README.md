@@ -197,6 +197,7 @@ Qdrant payload metadata intentionally keeps both legacy Hermes fields and Obsidi
 - Legacy/provenance fields: `file_name`, `file_path`, `source_root`, `source_kind`, `layer`, `title`, `tags`, and `sources`.
 - Obsidian-native fields: `obsidian_metadata_schema`, sanitized `frontmatter`/`properties`, `aliases`, `cssclasses`, `inline_tags`, `headings`, `links`/`wikilinks`, `embeds`, `blocks`, `block_ids`, `callouts`, `graph_edges`, future core-emitted `canvas_refs`/`base_refs` (or `*_references` variants), `diagnostics`, and `obsidian_summary`.
 - Secret-shaped metadata keys and copied request/response containers such as `api_key`, tokens, cookies, passwords, `headers`, `request_headers`, and `response_headers` are omitted before metadata can reach the Qdrant payload; sensitive tokens inside otherwise useful URLs/strings are redacted.
+- Structural Obsidian fields stay in Qdrant payload metadata for filtering/debugging, but they are excluded from embedding and LLM metadata text. The adapter also normalizes the document body before indexing so embed syntax, trailing block IDs, and callout markers do not become retrieval noise while readable link labels/callout prose remain searchable.
 
 ---
 

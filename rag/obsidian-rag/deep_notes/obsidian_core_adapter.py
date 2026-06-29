@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import unquote
 
 from llama_index.core import Document
@@ -122,6 +122,17 @@ _BEARER_SECRET_RE = re.compile(r"(?i)\b(bearer)\s+([^\s&#;,]+)")
 _ACRONYM_BOUNDARY_RE = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+_OBSIDIAN_REFERENCE_RE = re.compile(r"(?P<embed>!)?\[\[(?P<body>[^\]\n]+)\]\]")
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\([^)]*\)")
+_MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[(?P<label>[^\]]+)\]\([^)]*\)")
+_TRAILING_BLOCK_ID_RE = re.compile(r"(?<!\S)\^[A-Za-z0-9][A-Za-z0-9_-]*\s*$")
+_CALLOUT_START_RE = re.compile(
+    r"^\s*(?:>\s*)+\[![A-Za-z0-9_-]+\][+-]?(?:\s+(?P<title>.*))?$"
+)
+_BLOCKQUOTE_LINE_RE = re.compile(r"^\s*(?:>\s*)+(?P<content>.*)$")
+_FENCE_LINE_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})")
+_INLINE_WHITESPACE_RE = re.compile(r"[ \t]{2,}")
+_SPACE_BEFORE_PUNCTUATION_RE = re.compile(r"[ \t]+([,.;:!?])")
 
 _CORE_SRC_CANDIDATES = (
     Path("/workspace/obsidian-intelligence-core/src"),
@@ -159,11 +170,105 @@ def document_from_obsidian_core(
         file_path=relative_path,
     )
     return Document(
-        text=payload.text,
+        text=_semantic_text_from_obsidian_body(payload.text),
         metadata=qdrant_safe_metadata(payload.metadata),
         excluded_embed_metadata_keys=list(OBSIDIAN_STRUCTURAL_METADATA_KEYS),
         excluded_llm_metadata_keys=list(OBSIDIAN_STRUCTURAL_METADATA_KEYS),
     )
+
+
+def _semantic_text_from_obsidian_body(body: str) -> str:
+    """Return source text suitable for embedding and answer context.
+
+    The core parser intentionally preserves the original Markdown body. For RAG we
+    keep user-authored prose, headings, and callout body text, but remove Obsidian
+    reference syntax that is already represented in metadata payload fields.
+    """
+
+    lines: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    in_callout = False
+    for raw_line in str(body or "").splitlines():
+        fence = _FENCE_LINE_RE.match(raw_line)
+        if fence:
+            marker = fence.group("fence")
+            marker_char = marker[0]
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker_char
+            elif marker_char == fence_marker:
+                in_fence = False
+                fence_marker = ""
+            lines.append(raw_line.rstrip())
+            continue
+
+        if in_fence:
+            lines.append(raw_line.rstrip())
+            continue
+
+        line = raw_line
+        callout = _CALLOUT_START_RE.match(line)
+        if callout:
+            in_callout = True
+            line = callout.group("title") or ""
+        elif in_callout:
+            quoted = _BLOCKQUOTE_LINE_RE.match(line)
+            if quoted:
+                line = quoted.group("content")
+            else:
+                in_callout = False
+
+        line = _OBSIDIAN_REFERENCE_RE.sub(_reference_text_replacement, line)
+        line = _MARKDOWN_IMAGE_RE.sub(lambda match: match.group("alt").strip(), line)
+        line = _MARKDOWN_LINK_RE.sub(lambda match: match.group("label").strip(), line)
+        line = _TRAILING_BLOCK_ID_RE.sub("", line).rstrip()
+        line = _normalize_inline_spacing(line).rstrip()
+
+        if line.strip():
+            lines.append(line)
+        elif not raw_line.strip():
+            lines.append("")
+
+    return _collapse_blank_lines(lines).strip()
+
+
+def _reference_text_replacement(match: re.Match[str]) -> str:
+    if match.group("embed"):
+        return ""
+
+    body = match.group("body").strip()
+    target, separator, alias = body.partition("|")
+    if separator and alias.strip():
+        return alias.strip()
+    return _readable_reference_target(target)
+
+
+def _readable_reference_target(target: str) -> str:
+    text = target.strip()
+    if not text or text.startswith("^"):
+        return ""
+    text = text.replace("#^", " ").replace("#", " ").replace("^", " ")
+    if text.lower().endswith(".md"):
+        text = text[:-3]
+    return " ".join(part for part in text.split() if part)
+
+
+def _collapse_blank_lines(lines: list[str]) -> str:
+    collapsed: list[str] = []
+    previous_blank = False
+    for line in lines:
+        is_blank = not line.strip()
+        if is_blank and previous_blank:
+            continue
+        collapsed.append(line)
+        previous_blank = is_blank
+    return "\n".join(collapsed)
+
+
+def _normalize_inline_spacing(line: str) -> str:
+    line = _INLINE_WHITESPACE_RE.sub(" ", line)
+    return _SPACE_BEFORE_PUNCTUATION_RE.sub(r"\1", line)
 
 
 def qdrant_safe_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:

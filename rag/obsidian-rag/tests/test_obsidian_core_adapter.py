@@ -13,6 +13,7 @@ from deep_notes.ingest import load_documents, load_source_root, load_vault
 from deep_notes.obsidian_core_adapter import (
     OBSIDIAN_STRUCTURAL_METADATA_KEYS,
     _ensure_core_path,
+    _semantic_text_from_obsidian_body,
     document_from_obsidian_core,
     qdrant_safe_metadata,
 )
@@ -55,6 +56,68 @@ def _compound_note_with_sensitive_metadata() -> str:
         "# Secret-Free Payload Note\n"
         "Body with [[Safe Link]].\n"
     )
+
+
+def test_semantic_text_from_obsidian_body_removes_structural_syntax_but_keeps_prose() -> None:
+    body = (
+        "# Heading\n"
+        "Body links to [[Target Note|target alias]], [[Numeric Alias|400]], "
+        "[[Plain Note#Section^block]], and [web label](https://example.test).\n"
+        "Inline embed ![[diagram.png|400]], then prose with ![alt text](image.png).\n"
+        "![[diagram.png|400]]\n"
+        "Important detail. ^detail-block\n"
+        "> [!note] Keep\n"
+        "> Callout body.\n"
+        "```\n"
+        "literal = '[[Do Not Rewrite]] ^literal-block'\n"
+        "```\n"
+    )
+
+    text = _semantic_text_from_obsidian_body(body)
+
+    assert "# Heading" in text
+    assert "target alias" in text
+    assert "400" in text
+    assert "Plain Note Section block" in text
+    assert "web label" in text
+    assert "Inline embed, then prose with alt text." in text
+    assert "Important detail." in text
+    assert "Keep" in text
+    assert "Callout body." in text
+    assert "![[diagram.png|400]]" not in text
+    assert "diagram.png" not in text
+    assert "^detail-block" not in text
+    assert "[!note]" not in text
+    assert "[[Do Not Rewrite]] ^literal-block" in text
+
+
+def test_document_from_obsidian_core_uses_semantic_text_while_payload_keeps_structure(
+    tmp_path: Path,
+) -> None:
+    note = tmp_path / "note.md"
+    note.write_text(_compound_note(), encoding="utf-8")
+
+    doc = document_from_obsidian_core(
+        note,
+        tmp_path,
+        source_kind="vault",
+        layer="vault",
+        obsidian_core_path=str(CORE_SRC),
+    )
+
+    assert doc is not None
+    assert "target alias" in doc.text
+    assert "Important detail." in doc.text
+    assert "Keep" in doc.text
+    assert "Callout body." in doc.text
+    assert "![[diagram.png|400]]" not in doc.text
+    assert "diagram.png" not in doc.text
+    assert "^detail-block" not in doc.text
+    assert "[!note]" not in doc.text
+    assert doc.metadata["links"][0]["target"] == "Target Note"
+    assert doc.metadata["embeds"][0]["target"] == "diagram.png"
+    assert doc.metadata["block_ids"] == ["detail-block"]
+    assert doc.metadata["callouts"][0]["callout_type"] == "note"
 
 
 def test_document_from_obsidian_core_preserves_existing_and_native_metadata(tmp_path: Path) -> None:
@@ -233,6 +296,50 @@ def test_core_metadata_survives_into_chunk_node_payload(tmp_path: Path) -> None:
     assert "base_refs" in OBSIDIAN_STRUCTURAL_METADATA_KEYS
 
 
+def test_core_chunk_node_excludes_structural_metadata_from_embed_and_llm_text(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    wiki = vault / "wiki"
+    wiki.mkdir(parents=True)
+    (wiki / "note.md").write_text(_compound_note(), encoding="utf-8")
+
+    docs = load_documents(
+        Settings(
+            vault_path=str(vault),
+            obsidian_core_enabled=True,
+            obsidian_core_path=str(CORE_SRC),
+            chunk_strategy="markdown",
+        )
+    )
+    splitter = get_splitter(Settings(vault_path="", chunk_strategy="markdown"))
+    nodes = splitter.get_nodes_from_documents(docs)
+
+    assert nodes
+    node = nodes[0]
+    assert node.metadata["aliases"] == ["Adapter Alias"]
+    assert node.metadata["links"][0]["target"] == "Target Note"
+    assert node.metadata["embeds"][0]["target"] == "diagram.png"
+    assert node.metadata["block_ids"] == ["detail-block"]
+
+    embed_text = "\n".join(node.get_content(metadata_mode=MetadataMode.EMBED) for node in nodes)
+    llm_text = "\n".join(node.get_content(metadata_mode=MetadataMode.LLM) for node in nodes)
+    for noisy_value in (
+        "Adapter Alias",
+        "diagram.png",
+        "detail-block",
+        "obsidian_summary",
+        "[!note]",
+        "![[diagram.png|400]]",
+    ):
+        assert noisy_value not in embed_text
+        assert noisy_value not in llm_text
+    assert "target alias" in embed_text
+    assert "target alias" in llm_text
+    assert "Callout body." in embed_text
+    assert "Callout body." in llm_text
+
+
 def test_document_from_obsidian_core_excludes_structural_metadata_from_embed_and_llm_text(
     tmp_path: Path,
 ) -> None:
@@ -254,6 +361,12 @@ def test_document_from_obsidian_core_excludes_structural_metadata_from_embed_and
     assert "Adapter Alias" not in doc.get_content(metadata_mode=MetadataMode.LLM)
     assert "obsidian_summary" not in doc.get_content(metadata_mode=MetadataMode.EMBED)
     assert "obsidian_summary" not in doc.get_content(metadata_mode=MetadataMode.LLM)
+    assert "![[diagram.png|400]]" not in doc.get_content(metadata_mode=MetadataMode.EMBED)
+    assert "![[diagram.png|400]]" not in doc.get_content(metadata_mode=MetadataMode.LLM)
+    assert "^detail-block" not in doc.get_content(metadata_mode=MetadataMode.EMBED)
+    assert "^detail-block" not in doc.get_content(metadata_mode=MetadataMode.LLM)
+    assert "[!note]" not in doc.get_content(metadata_mode=MetadataMode.EMBED)
+    assert "[!note]" not in doc.get_content(metadata_mode=MetadataMode.LLM)
 
 
 def test_document_from_obsidian_core_skips_empty_body(tmp_path: Path) -> None:

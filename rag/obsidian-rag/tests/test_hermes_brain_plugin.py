@@ -2,7 +2,6 @@ import importlib.util
 import json
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PLUGIN_DIR = REPO_ROOT / "plugins-source" / "hermes-brain-rag"
 PLUGIN_INIT = PLUGIN_DIR / "__init__.py"

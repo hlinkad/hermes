@@ -1,8 +1,10 @@
 from collections.abc import Generator
 from dataclasses import dataclass
+from typing import Any
 
 from llama_index.core import VectorStoreIndex
 from llama_index.core.llms import ChatMessage
+from llama_index.core.schema import MetadataMode
 
 from deep_notes.components.embeddings import get_embed_model
 from deep_notes.components.llm import get_llm
@@ -77,6 +79,18 @@ def format_context(sources: list[SourceChunk], max_chars: int | None = None) -> 
     return "\n\n---\n\n".join(blocks)
 
 
+def _node_text_for_context(node: Any) -> str:
+    """Return only the retrieved body text for LLM context.
+
+    Qdrant/LlamaIndex nodes can carry rich metadata payloads for filtering,
+    debugging, and citations. Retrieval context should keep that metadata behind
+    the explicit ``Source: ...`` header instead of letting structural Obsidian
+    fields leak into the body text sent to the answer LLM.
+    """
+
+    return node.get_content(metadata_mode=MetadataMode.NONE)
+
+
 def retrieve(question: str, config: Settings | None = None) -> RetrievalResult:
     """Retrieve relevant chunks without generating an answer."""
     if config is None:
@@ -97,7 +111,7 @@ def retrieve(question: str, config: Settings | None = None) -> RetrievalResult:
         SourceChunk(
             file_name=node.metadata.get("file_name", "unknown"),
             file_path=node.metadata.get("file_path", ""),
-            text=node.get_content(),
+            text=_node_text_for_context(node),
             score=node.score or 0.0,
             layer=node.metadata.get("layer", ""),
             source_kind=node.metadata.get("source_kind", ""),

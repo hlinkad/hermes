@@ -10,9 +10,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 from llama_index.core import Document
 
