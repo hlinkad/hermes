@@ -99,6 +99,9 @@ cp deep_notes/.env.example deep_notes/.env
 # Mac-host runs can keep VAULT_PATH=/Users/denishlinka/hermes/brain and localhost URLs.
 # Hermes Docker runs should leave VAULT_PATH empty unless /Users is mounted,
 # and should use host.docker.internal for Qdrant/Ollama.
+# For live Hermes Brain RAG with Obsidian Core inside Hermes Docker, set:
+#   OBSIDIAN_CORE_ENABLED=true
+#   OBSIDIAN_CORE_PATH=/workspace/obsidian-intelligence-core/src
 ```
 
 ### Index your vault
@@ -154,7 +157,7 @@ Then copy the built plugin folder into your vault's `.obsidian/plugins/` directo
 
 ## Configuration reference
 
-All settings can come from OS environment variables, the ignored project file `deep_notes/.env`, or the active Hermes env file `~/.hermes/.env`. Precedence is: explicit `Settings(...)` overrides > OS env > `deep_notes/.env` > `~/.hermes/.env` > code defaults. The most useful knobs:
+All settings can come from OS environment variables, the ignored project file `deep_notes/.env`, or the active Hermes env file `~/.hermes/.env`. Precedence is: explicit `Settings(...)` overrides > OS env > `deep_notes/.env` > `~/.hermes/.env` > code defaults. Keep RAG ingest/runtime settings such as `VAULT_PATH`, source roots, Qdrant/Ollama URLs, and `OBSIDIAN_CORE_*` in `deep_notes/.env`; keep global Hermes gateway/plugin/API settings in `~/.hermes/.env`. See [`docs/live-hermes-brain-rag-env.md`](docs/live-hermes-brain-rag-env.md) for the DH-224 live Obsidian Core opt-in values and verification sequence. The most useful knobs:
 
 | Variable | Default/example | Notes |
 |---|---|---|

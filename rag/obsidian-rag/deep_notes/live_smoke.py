@@ -359,6 +359,7 @@ def verify_obsidian_payload(
     return {
         "file_path": payload["file_path"],
         "source_root": payload["source_root"],
+        "obsidian_metadata_schema": payload["obsidian_metadata_schema"],
         "legacy_fields_present": [key for key in legacy_fields if key in payload],
         "obsidian_fields_present": [key for key in obsidian_fields if key in payload],
         "structural_metadata_excluded_from_embed_text": True,

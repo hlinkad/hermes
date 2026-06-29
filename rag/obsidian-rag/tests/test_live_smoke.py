@@ -68,6 +68,7 @@ def test_verify_obsidian_payload_accepts_rich_metadata_and_noise_free_text() -> 
     result = verify_obsidian_payload(_sample_payload(), UNIQUE_PHRASE)
 
     assert result["file_path"] == FIXTURE_RELATIVE_PATH
+    assert result["obsidian_metadata_schema"] == "hermes_brain.rag_metadata.v1"
     assert result["structural_metadata_excluded_from_embed_text"] is True
     assert result["structural_metadata_excluded_from_llm_text"] is True
     assert "aliases" in result["obsidian_fields_present"]

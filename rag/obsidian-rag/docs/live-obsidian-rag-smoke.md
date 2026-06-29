@@ -62,4 +62,6 @@ For debugging only, use `--keep-collection` or `--keep-vault`; do not use those 
 
 ## Feature gates
 
-`OBSIDIAN_CORE_ENABLED` stays disabled by default in normal settings. This smoke enables it explicitly for the scoped fixture run and does not confirm any persistent collection update unless `--collection-name` is intentionally set to a persistent target.
+`OBSIDIAN_CORE_ENABLED` stays disabled by default in code defaults. The DH-224 live Hermes Brain RAG runtime opt-in belongs in the ignored project-local `deep_notes/.env`; see [`live-hermes-brain-rag-env.md`](live-hermes-brain-rag-env.md) for the exact values, host/container path boundary, and verification sequence.
+
+This smoke enables Obsidian Core explicitly for the scoped fixture run and does not confirm any persistent collection update unless `--collection-name` is intentionally set to a persistent target. Its JSON report includes `metadata_checks.obsidian_metadata_schema=hermes_brain.rag_metadata.v1` when the core-backed payload path is active.
