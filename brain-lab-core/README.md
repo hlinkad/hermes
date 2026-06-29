@@ -28,6 +28,15 @@ Generic AI Lab foundation contracts and package skeleton.
 - `StageContext` gives concrete handlers a safe way to register declared outputs, record progress/lease updates, and cooperatively cancel without deleting inspectable state/artifacts.
 - `JobRunner.list_job_events(job_id)` returns append-only job/stage events from the ledger for API/MCP consumers.
 
+`brain_lab_core.retrieval` adds the dependency-free Qdrant-style retrieval facade:
+
+- `QdrantRetrievalFacade` manages vector collections over an injected Qdrant-like backend and embedding provider.
+- `RetrievalChunk` defines the chunk payload shape with canonical `ArtifactRef`, `EvidenceRef` citations, freshness state, and flat namespaced tool fields such as `video.t_start`.
+- `SearchFreshnessPolicy.CURRENT_ONLY` excludes stale/superseded artifacts by default; `INCLUDE_WITH_FLAGS` returns them with freshness flags for review/debug flows. `sqlite_artifact_freshness_resolver(ledger)` adapts the canonical SQLite ledger so search does not trust stale vector payload snapshots.
+- `tool_filter={"video.t_start": {"gte": ...}}`-style filters target flat namespaced tool fields without embedding tool-specific schemas into the core package. The dependency-free in-memory backend supports equality, `in`, range (`gt`/`gte`/`lt`/`lte`), and `exists` operators.
+- Collection config metadata binds the retrieval payload contract, embedding provider, vector dimension, and distance metric so incompatible same-dimensional embedders are rejected instead of silently reusing an index.
+- `retrieval_embedding_provider_spec(...)` registers embedding providers through the generic `AdapterRegistry` without making concrete tools own vector-store code.
+
 Every public contract is a frozen dataclass with constructor-time validation and deterministic JSON support:
 
 ```python
@@ -85,18 +94,58 @@ result = ledger.register_artifact_from_file(
 assert result.artifact.freshness.value == "current"
 ```
 
+## Retrieval facade
+
+Concrete tools such as video-intel create chunks and evidence refs, then call the generic facade rather than owning Qdrant payload or freshness logic:
+
+```python
+from brain_lab_core.retrieval import (
+    DeterministicEmbeddingProvider,
+    InMemoryQdrantBackend,
+    QdrantRetrievalFacade,
+    RetrievalChunk,
+    sqlite_artifact_freshness_resolver,
+)
+
+facade = QdrantRetrievalFacade(
+    vector_store=InMemoryQdrantBackend(),
+    embedding_provider=DeterministicEmbeddingProvider(dimension=16),
+)
+facade.index_chunks(
+    "video-intel.chunks",
+    [
+        RetrievalChunk(
+            chunk_id="video-001:0001",
+            text="The generic facade stores cited retrieval payloads.",
+            artifact_ref=artifact_ref,
+            evidence_refs=(evidence_ref,),
+            tool_fields={"video.t_start": 0.0, "video.t_end": 4.2},
+        )
+    ],
+    recreate=True,
+)
+hits = facade.search(
+    "video-intel.chunks",
+    "cited retrieval",
+    limit=3,
+    tool_filter={"video.t_start": {"gte": 0.0}, "video.t_end": {"lte": 10.0}},
+    freshness_resolver=sqlite_artifact_freshness_resolver(ledger),
+).hits
+assert hits[0].evidence_refs[0].source_type == "transcript"
+```
+
 ## Extension-point packages
 
 The package also exposes importable namespaces for later foundation work:
 
 - `brain_lab_core.registry` — tool/provider registry (metadata-only capability discovery)
 - `brain_lab_core.orchestration` — job runner lifecycle, retries, resume/stale handling, leases, cancellation, and event stream
-- `brain_lab_core.retrieval` — retrieval facade
+- `brain_lab_core.retrieval` — Qdrant-style retrieval facade with cited payloads and freshness-aware search
 - `brain_lab_core.api` — control-plane/API surfaces
 - `brain_lab_core.security` — security, secrets, and sandbox gates
 - `brain_lab_core.observability` — structured events and diagnostics
 
-Registry metadata discovery, the state ledger, and the generic job runner are implemented. The remaining extension namespaces stay placeholders until their owning issues; DH-203 does not implement retrieval indexing, API services, security gates, or domain-specific ingest logic.
+Registry metadata discovery, the state ledger, generic job runner, and retrieval facade are implemented. The remaining extension namespaces stay placeholders until their owning issues; DH-204 does not implement API services, security gates, concrete Qdrant client wiring, or domain-specific ingest/chunk generation logic.
 
 ## Development verification
 
