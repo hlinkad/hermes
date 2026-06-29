@@ -497,6 +497,15 @@ class SQLiteArtifactLedgerTests(unittest.TestCase):
             ledger.supersede_artifact(old.artifact_id, replacement_artifact_id=new.artifact_id, reason="manual replacement")
 
             self.assertEqual(ledger.get_artifact(old.artifact_id).freshness, FreshnessState.SUPERSEDED)
+            duplicate_old = ledger.register_artifact_from_file(
+                artifact_id=old.artifact_id,
+                artifact_type="report.markdown",
+                artifact_schema_version="report.v1",
+                file_path=old_path,
+            )
+            self.assertTrue(duplicate_old.duplicate)
+            self.assertEqual(duplicate_old.artifact.freshness, FreshnessState.SUPERSEDED)
+            self.assertEqual(ledger.get_artifact(old.artifact_id).freshness, FreshnessState.SUPERSEDED)
             self.assertEqual(ledger.get_artifact(new.artifact_id).freshness, FreshnessState.CURRENT)
             self.assertEqual(ledger.get_artifact(child.artifact_id).freshness, FreshnessState.STALE)
             self.assertEqual(ledger.artifact_count(), 3)

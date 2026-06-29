@@ -1,8 +1,23 @@
-"""Generic job orchestration extension point.
-
-Future job-runner work owns stage planning, leases, retries, resume, and
-cancellation while consuming the contracts defined in DH-200.
-"""
+"""Generic local job orchestration surface."""
 from __future__ import annotations
 
-__all__: list[str] = []
+from .job_runner import (
+    JobCancellationRequested,
+    JobRunner,
+    StageContext,
+    StageExecutionError,
+    StageExecutionResult,
+)
+from .planner import ArtifactContract, JobPlan, RetryPolicy, StagePlan
+
+__all__ = [
+    "ArtifactContract",
+    "JobCancellationRequested",
+    "JobPlan",
+    "JobRunner",
+    "RetryPolicy",
+    "StageContext",
+    "StageExecutionError",
+    "StageExecutionResult",
+    "StagePlan",
+]

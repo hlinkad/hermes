@@ -152,6 +152,15 @@ class SQLiteArtifactLedger:
                 raise ArtifactConflictError(
                     f"artifact {normalized_id.value!r} in namespace {normalized_id.namespace!r} already exists with different canonical payload"
                 )
+            if existing.freshness == FreshnessState.STALE:
+                with self._conn:
+                    self._set_artifact_freshness(
+                        normalized_id.qualified,
+                        FreshnessState.CURRENT,
+                        reason="artifact revalidated by duplicate registration",
+                        event_type="artifact.revalidated",
+                    )
+                existing = self.get_artifact(normalized_id)
             return ArtifactRegistrationResult(artifact=existing, inserted=False, duplicate=True)
 
         stale_count = 0
@@ -347,6 +356,26 @@ class SQLiteArtifactLedger:
         if row is None:
             raise KeyError(evidence_id)
         return EvidenceRef.from_dict(_loads(row["contract_json"]))
+
+    def record_event(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        event_type: str,
+        reason: str = "",
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Append a public, JSON-safe ledger event for API/MCP consumers."""
+
+        with self._conn:
+            self._record_event(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                event_type=event_type,
+                reason=reason,
+                payload=payload or {},
+            )
 
     def list_events(self, *, entity_type: str | None = None, entity_id: str | None = None) -> tuple[LedgerEvent, ...]:
         clauses: list[str] = []

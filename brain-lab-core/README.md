@@ -20,6 +20,14 @@ Generic AI Lab foundation contracts and package skeleton.
 - `AdapterRegistry` registers `ProviderSpec` declarations and indexes providers by capability/version plus input/output artifact type.
 - `fixture_tool_manifest()`, `fixture_provider_spec()`, and `register_fixture_tool()` provide a fake tool/provider seam for downstream integration tests.
 
+`brain_lab_core.orchestration` adds the generic local job-runner surface:
+
+- `JobPlan`, `StagePlan`, and `ArtifactContract` validate explicit stage input/output contracts before execution.
+- `JobRunner` persists job/stage lifecycle through the SQLite ledger, including `pending`, `running`, `completed`, `failed`, `stale`, `canceled`, and `skipped` stage states.
+- `RetryPolicy` classifies retryable/non-retryable exact or prefix-wildcard error codes and honors normalized `ErrorEnvelope.retryable` flags.
+- `StageContext` gives concrete handlers a safe way to register declared outputs, record progress/lease updates, and cooperatively cancel without deleting inspectable state/artifacts.
+- `JobRunner.list_job_events(job_id)` returns append-only job/stage events from the ledger for API/MCP consumers.
+
 Every public contract is a frozen dataclass with constructor-time validation and deterministic JSON support:
 
 ```python
@@ -82,13 +90,13 @@ assert result.artifact.freshness.value == "current"
 The package also exposes importable namespaces for later foundation work:
 
 - `brain_lab_core.registry` — tool/provider registry (metadata-only capability discovery)
-- `brain_lab_core.orchestration` — job runner lifecycle
+- `brain_lab_core.orchestration` — job runner lifecycle, retries, resume/stale handling, leases, cancellation, and event stream
 - `brain_lab_core.retrieval` — retrieval facade
 - `brain_lab_core.api` — control-plane/API surfaces
 - `brain_lab_core.security` — security, secrets, and sandbox gates
 - `brain_lab_core.observability` — structured events and diagnostics
 
-Registry metadata discovery and the state ledger are implemented. The remaining extension namespaces stay placeholders until their owning issues; DH-202 does not implement a job runner, retrieval index, API service, or domain-specific ingest logic.
+Registry metadata discovery, the state ledger, and the generic job runner are implemented. The remaining extension namespaces stay placeholders until their owning issues; DH-203 does not implement retrieval indexing, API services, security gates, or domain-specific ingest logic.
 
 ## Development verification
 
