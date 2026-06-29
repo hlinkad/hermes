@@ -107,6 +107,19 @@ cp deep_notes/.env.example deep_notes/.env
 python -m deep_notes.ingest
 ```
 
+### Run a scoped live Obsidian/Qdrant smoke
+
+Use the reproducible smoke harness when validating the Obsidian-aware ingestion path against live Qdrant/Ollama without touching the persistent Hermes Brain collection. It creates a unique temporary fixture vault and collection, clears extra source/book paths, forces auto-context on for the run, verifies scoped metadata/retrieval/negative-query behavior, then cleans up by default.
+
+```bash
+python -m deep_notes.live_smoke \
+  --qdrant-url http://127.0.0.1:6333 \
+  --ollama-base-url http://127.0.0.1:11434 \
+  --obsidian-core-path /path/to/obsidian-intelligence-core/src
+```
+
+See [`docs/live-obsidian-rag-smoke.md`](docs/live-obsidian-rag-smoke.md) for Docker-host URLs, JSON output, and rollback cleanup commands.
+
 ### Launch the Streamlit UI
 
 ```bash
