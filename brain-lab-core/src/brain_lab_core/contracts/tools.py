@@ -25,6 +25,9 @@ from .base import (
 )
 
 
+SUPPORTED_TOOL_ENTRYPOINT_KINDS = ("python", "package", "cli", "container_image")
+
+
 @dataclass(frozen=True)
 class ResourceProfile:
     """Portable resource declaration for local workers or containers."""
@@ -135,7 +138,39 @@ class ToolManifest:
         object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
 
     def validate(self) -> tuple[ContractDiagnostic, ...]:
-        return ()
+        supported_entrypoints = set(SUPPORTED_TOOL_ENTRYPOINT_KINDS)
+        observed_entrypoints = set(self.entrypoints)
+        diagnostics: list[ContractDiagnostic] = []
+
+        unsupported = tuple(sorted(observed_entrypoints.difference(supported_entrypoints)))
+        if unsupported:
+            supported = ", ".join(SUPPORTED_TOOL_ENTRYPOINT_KINDS)
+            diagnostics.append(
+                ContractDiagnostic(
+                    code="tool_manifest.entrypoints.unsupported",
+                    message=(
+                        "unsupported tool_manifest.entrypoints kind(s): "
+                        f"{', '.join(unsupported)}; supported kinds: {supported}"
+                    ),
+                    severity="error",
+                    location="entrypoints",
+                )
+            )
+
+        if not observed_entrypoints.intersection(supported_entrypoints):
+            supported = ", ".join(SUPPORTED_TOOL_ENTRYPOINT_KINDS)
+            diagnostics.append(
+                ContractDiagnostic(
+                    code="tool_manifest.entrypoints.missing_supported",
+                    message=(
+                        "tool_manifest.entrypoints must include at least one supported "
+                        f"entrypoint kind: {supported}"
+                    ),
+                    severity="error",
+                    location="entrypoints",
+                )
+            )
+        return tuple(diagnostics)
 
     def to_dict(self) -> dict[str, JsonValue]:
         return {

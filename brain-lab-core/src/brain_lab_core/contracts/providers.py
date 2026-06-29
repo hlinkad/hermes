@@ -108,7 +108,24 @@ class ProviderSpec:
         object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
 
     def validate(self) -> tuple[ContractDiagnostic, ...]:
-        return ()
+        seen: set[tuple[str, str]] = set()
+        diagnostics: list[ContractDiagnostic] = []
+        for capability in self.capabilities:
+            key = (capability.name, capability.version)
+            if key in seen:
+                diagnostics.append(
+                    ContractDiagnostic(
+                        code="provider_spec.capability.duplicate",
+                        message=(
+                            "duplicate provider capability "
+                            f"{capability.name!r} version {capability.version!r}"
+                        ),
+                        severity="error",
+                        location="capabilities",
+                    )
+                )
+            seen.add(key)
+        return tuple(diagnostics)
 
     def to_dict(self) -> dict[str, JsonValue]:
         return {

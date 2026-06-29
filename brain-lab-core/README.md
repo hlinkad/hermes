@@ -14,6 +14,12 @@ Generic AI Lab foundation contracts and package skeleton.
 - `ErrorEnvelope`, `ContractDiagnostic`, `ContractValidationError`
 - `SchemaExtensionPoint` for concrete tool-owned schemas
 
+`brain_lab_core.registry` adds the first metadata registry surface:
+
+- `ToolRegistry` registers `ToolManifest` declarations, validates package/CLI/container entrypoints, and indexes tools by capability plus input/output artifact type.
+- `AdapterRegistry` registers `ProviderSpec` declarations and indexes providers by capability/version plus input/output artifact type.
+- `fixture_tool_manifest()`, `fixture_provider_spec()`, and `register_fixture_tool()` provide a fake tool/provider seam for downstream integration tests.
+
 Every public contract is a frozen dataclass with constructor-time validation and deterministic JSON support:
 
 ```python
@@ -23,6 +29,21 @@ artifact_id = ArtifactId("transcript-001", namespace="video-intel")
 loaded = ArtifactId.from_json(artifact_id.to_json())
 assert loaded == artifact_id
 ```
+
+## Registry discovery
+
+The registry layer is intentionally metadata-only: it stores manifests/specs and exposes JSON-safe discovery documents without importing package entrypoints, executing CLIs, or inspecting container images.
+
+```python
+from brain_lab_core.registry import ToolRegistry, fixture_tool_manifest
+
+registry = ToolRegistry()
+registry.register(fixture_tool_manifest())
+discovery = registry.discovery_document()
+assert discovery["capabilities"][0]["tool_id"] == "fixture-tool"
+```
+
+`ToolRegistry` accepts package (`python` or `package`), `cli`, and optional `container_image` entrypoints. `AdapterRegistry` exposes provider capabilities by name/version for API and MCP consumers.
 
 ## State ledger
 
@@ -60,14 +81,14 @@ assert result.artifact.freshness.value == "current"
 
 The package also exposes importable namespaces for later foundation work:
 
-- `brain_lab_core.registry` — tool/provider registry
+- `brain_lab_core.registry` — tool/provider registry (metadata-only capability discovery)
 - `brain_lab_core.orchestration` — job runner lifecycle
 - `brain_lab_core.retrieval` — retrieval facade
 - `brain_lab_core.api` — control-plane/API surfaces
 - `brain_lab_core.security` — security, secrets, and sandbox gates
 - `brain_lab_core.observability` — structured events and diagnostics
 
-These modules remain placeholders until their owning issues. DH-201 does not implement a job runner, retrieval index, API service, or domain-specific ingest logic.
+Registry metadata discovery and the state ledger are implemented. The remaining extension namespaces stay placeholders until their owning issues; DH-202 does not implement a job runner, retrieval index, API service, or domain-specific ingest logic.
 
 ## Development verification
 
