@@ -28,6 +28,7 @@ class FreshnessState(str, Enum):
 
     CURRENT = "current"
     STALE = "stale"
+    SUPERSEDED = "superseded"
     UNKNOWN = "unknown"
 
 
@@ -42,8 +43,14 @@ class ArtifactId:
     contract_type: ClassVar[str] = "brain_lab.artifact_id"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "value", _required_text(self.value, "artifact_id.value"))
-        object.__setattr__(self, "namespace", _required_text(self.namespace, "artifact_id.namespace"))
+        value = _required_text(self.value, "artifact_id.value")
+        namespace = _required_text(self.namespace, "artifact_id.namespace")
+        if ":" in value:
+            raise ContractValidationError("artifact_id.value must not contain ':'")
+        if ":" in namespace:
+            raise ContractValidationError("artifact_id.namespace must not contain ':'")
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "namespace", namespace)
         object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
 
     @property

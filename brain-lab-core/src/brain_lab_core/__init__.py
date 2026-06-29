@@ -1,8 +1,9 @@
 """Generic AI Lab foundation package.
 
 `brain_lab_core` owns stable, tool-neutral contracts for artifacts, evidence,
-jobs, tool manifests, providers, and normalized errors. Concrete tools such as
-video-intel should import these contracts instead of redefining generic state.
+jobs, tool manifests, providers, normalized errors, and the local SQLite-backed
+artifact/state ledger. Concrete tools such as video-intel should import these
+contracts and state helpers instead of redefining generic foundation behavior.
 """
 from __future__ import annotations
 

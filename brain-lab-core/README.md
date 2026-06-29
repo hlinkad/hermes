@@ -24,11 +24,42 @@ loaded = ArtifactId.from_json(artifact_id.to_json())
 assert loaded == artifact_id
 ```
 
+## State ledger
+
+`brain_lab_core.state` implements the generic local source of truth for artifacts and runtime state:
+
+- `SQLiteArtifactLedger` owns canonical SQLite tables for artifacts, artifact input edges, jobs, stage runs, evidence refs, append-only events, and schema migrations.
+- `register_artifact_from_file(...)` measures filesystem payloads, stores checksum/size/path/URI, producer/stage provenance, input artifact IDs, schema version, metadata, and config fingerprints.
+- Duplicate artifact registration is idempotent; reusing an artifact ID for a different canonical payload raises `ArtifactConflictError`.
+- `ArtifactId` namespace/value components reserve `:` so qualified IDs remain unambiguous.
+- Freshness states include `current`, `stale`, `superseded`, and `unknown`; config/input changes, explicit input changes, and superseding artifacts mark dependents stale transitively.
+- SQLite is canonical. The filesystem helper only measures payloads and derives stable URIs relative to the configured artifact root.
+- Schema migrations are recorded in `schema_migrations` and guarded by `PRAGMA user_version`; evidence refs enforce a foreign key to their source artifact.
+
+Minimal example:
+
+```python
+from pathlib import Path
+from brain_lab_core.contracts import ArtifactId
+from brain_lab_core.state import SQLiteArtifactLedger
+
+ledger = SQLiteArtifactLedger("state/ledger.sqlite", artifact_root=Path.cwd())
+result = ledger.register_artifact_from_file(
+    artifact_id=ArtifactId("report-001", namespace="fixture"),
+    artifact_type="report.markdown",
+    artifact_schema_version="report.v1",
+    file_path="artifacts/report.md",
+    producer_tool_id="fixture-tool",
+    producer_stage_id="summarize",
+    config={"prompt": "v1"},
+)
+assert result.artifact.freshness.value == "current"
+```
+
 ## Extension-point packages
 
-The package exposes empty, importable namespaces for later foundation work:
+The package also exposes importable namespaces for later foundation work:
 
-- `brain_lab_core.state` — artifact/state ledger
 - `brain_lab_core.registry` — tool/provider registry
 - `brain_lab_core.orchestration` — job runner lifecycle
 - `brain_lab_core.retrieval` — retrieval facade
@@ -36,7 +67,7 @@ The package exposes empty, importable namespaces for later foundation work:
 - `brain_lab_core.security` — security, secrets, and sandbox gates
 - `brain_lab_core.observability` — structured events and diagnostics
 
-These modules are placeholders by design. DH-200 does not implement a job runner, ledger, retrieval index, or domain-specific ingest logic.
+These modules remain placeholders until their owning issues. DH-201 does not implement a job runner, retrieval index, API service, or domain-specific ingest logic.
 
 ## Development verification
 
