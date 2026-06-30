@@ -10,6 +10,7 @@ Generic AI Lab foundation contracts and package skeleton.
 - `EvidenceRef`, `Citation`, `SourceSpan`
 - `Job`, `StageRun`, `LifecycleState`, `RetryMetadata`
 - `ToolManifest`, `ResourceProfile`
+- `DocumentExtractionResult`, `PdfExtractionResult`, `DocumentPage`, `PdfPageResult`, `DocumentBlock`, `PdfBlock`, `DocumentProvenance`
 - `ProviderSpec`, `ProviderCapability`
 - `ErrorEnvelope`, `ContractDiagnostic`, `ContractValidationError`
 - `SchemaExtensionPoint` for concrete tool-owned schemas
@@ -20,6 +21,7 @@ Generic AI Lab foundation contracts and package skeleton.
 - `AdapterRegistry` registers `ProviderSpec` declarations and indexes providers by capability/version plus input/output artifact type.
 - `fixture_tool_manifest()`, `fixture_provider_spec()`, and `register_fixture_tool()` provide a fake tool/provider seam for downstream integration tests.
 - `video_intel_tool_manifest()` publishes the video-intel DH-94..DH-103 integration boundary as metadata-only discovery: capabilities, artifact types, optional secret declaration, sandbox/network requirements, dependency metadata, and stage-contract mapping without importing or executing video-intel.
+- `mineru_document_extraction_manifest()` publishes the DH-228 document/PDF extraction boundary for the approved MinerU API service: `document.extract`, `pdf.extract`, `ocr.extract`, and output artifact types `document.extraction`, `pdf.extraction`, `document.markdown`, and `document.assets`, without importing or executing MinerU.
 
 `brain_lab_core.orchestration` adds the generic local job-runner surface:
 
@@ -70,6 +72,46 @@ assert discovery["capabilities"][0]["tool_id"] == "fixture-tool"
 ```
 
 `ToolRegistry` accepts package (`python` or `package`), `cli`, and optional `container_image` entrypoints. `AdapterRegistry` exposes provider capabilities by name/version for API and MCP consumers.
+
+## Document/PDF extraction contracts
+
+DH-228 adds the foundation-owned extraction artifact shape that downstream PDF work should consume through the facade instead of coupling to MinerU internals.
+
+```python
+from brain_lab_core.contracts import (
+    Checksum,
+    DocumentBlock,
+    DocumentBlockKind,
+    DocumentExtractionResult,
+    DocumentPage,
+)
+
+result = DocumentExtractionResult(
+    document_id="sample",
+    source_uri="file:///data/sample.pdf",
+    content_hash=Checksum("sha256", "a" * 64),
+    mime_type="application/pdf",
+    pages=(
+        DocumentPage(
+            page_number=1,
+            blocks=(DocumentBlock("p1-b001", DocumentBlockKind.TEXT, order=0, text="hello"),),
+            markdown="hello",
+        ),
+    ),
+)
+loaded = DocumentExtractionResult.from_json(result.to_json())
+assert loaded.pages[0].blocks[0].text == "hello"
+```
+
+The contracts can carry born-digital text, OCR text, tables, image/figure asset metadata, formulas, empty pages, partial page failures, and document-level diagnostics. `DocumentProvenance` records the source URI/path, source content hash, page number/span, block ID/span, extractor name/version, extraction timestamp, and diagnostics. `PdfExtractionResult`, `PdfPageResult`, and `PdfBlock` are PDF-specific contract aliases with their own contract headers for serialized artifacts.
+
+DH-211 should use these artifacts as follows:
+
+1. Submit a foundation job or API/MCP request against a tool that advertises `document.extract` / `pdf.extract`.
+2. Read the resulting `document.extraction` JSON artifact as `DocumentExtractionResult` or the `pdf.extraction` JSON artifact as `PdfExtractionResult`.
+3. Use `document.markdown` and `document.assets` artifact refs for human-readable text and extracted files.
+4. Build downstream chunks/citations from page/block IDs, page spans, block spans, and diagnostics preserved in the extraction result.
+5. Keep Obsidian vault writes and Qdrant indexing downstream of this contract; neither is part of the extraction artifact schema.
 
 ## State ledger
 

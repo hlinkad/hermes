@@ -3,6 +3,18 @@ from __future__ import annotations
 
 from .artifacts import ArtifactId, ArtifactRef, Checksum, FreshnessState, Provenance
 from .base import CONTRACT_SCHEMA_VERSION, ContractDiagnostic, ContractValidationError
+from .documents import (
+    DocumentBlock,
+    DocumentBlockKind,
+    DocumentExtractionResult,
+    DocumentExtractionStatus,
+    DocumentPage,
+    DocumentPageStatus,
+    DocumentProvenance,
+    PdfBlock,
+    PdfExtractionResult,
+    PdfPageResult,
+)
 from .errors import ErrorEnvelope
 from .evidence import Citation, EvidenceRef, SourceSpan
 from .extensions import SchemaExtensionPoint
@@ -18,6 +30,13 @@ __all__ = [
     "Citation",
     "ContractDiagnostic",
     "ContractValidationError",
+    "DocumentBlock",
+    "DocumentBlockKind",
+    "DocumentExtractionResult",
+    "DocumentExtractionStatus",
+    "DocumentPage",
+    "DocumentPageStatus",
+    "DocumentProvenance",
     "ErrorEnvelope",
     "EvidenceRef",
     "FreshnessState",
@@ -26,6 +45,9 @@ __all__ = [
     "Provenance",
     "ProviderCapability",
     "ProviderSpec",
+    "PdfBlock",
+    "PdfExtractionResult",
+    "PdfPageResult",
     "ResourceProfile",
     "RetryMetadata",
     "SchemaExtensionPoint",

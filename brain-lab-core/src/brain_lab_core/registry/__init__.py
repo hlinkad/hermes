@@ -12,6 +12,7 @@ from .fixtures import (
     fixture_provider_spec,
     fixture_registries,
     fixture_tool_manifest,
+    mineru_document_extraction_manifest,
     register_fixture_tool,
     video_intel_tool_manifest,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "fixture_provider_spec",
     "fixture_registries",
     "fixture_tool_manifest",
+    "mineru_document_extraction_manifest",
     "register_fixture_tool",
     "video_intel_tool_manifest",
 ]
