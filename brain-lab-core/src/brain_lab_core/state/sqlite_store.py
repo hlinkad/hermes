@@ -209,6 +209,23 @@ class SQLiteArtifactLedger:
             raise KeyError(normalized_id.qualified)
         return Path(row["file_path"])
 
+    def list_artifacts(self, *, freshness: FreshnessState | str | None = None) -> tuple[ArtifactRef, ...]:
+        """Return canonical artifact rows, optionally filtered by freshness state."""
+
+        params: tuple[str, ...]
+        if freshness is None:
+            where = ""
+            params = ()
+        else:
+            normalized = FreshnessState(freshness).value
+            where = "WHERE freshness = ?"
+            params = (normalized,)
+        rows = self._conn.execute(
+            f"SELECT contract_json FROM artifacts {where} ORDER BY artifact_qualified_id",
+            params,
+        ).fetchall()
+        return tuple(ArtifactRef.from_dict(_loads(row["contract_json"])) for row in rows)
+
     def artifact_count(self) -> int:
         row = self._conn.execute("SELECT COUNT(*) AS count FROM artifacts").fetchone()
         return int(row["count"])

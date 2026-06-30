@@ -18,6 +18,9 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
 ]
 
+[project.optional-dependencies]
+api = ["fastapi"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

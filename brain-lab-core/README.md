@@ -37,6 +37,13 @@ Generic AI Lab foundation contracts and package skeleton.
 - Collection config metadata binds the retrieval payload contract, embedding provider, vector dimension, and distance metric so incompatible same-dimensional embedders are rejected instead of silently reusing an index.
 - `retrieval_embedding_provider_spec(...)` registers embedding providers through the generic `AdapterRegistry` without making concrete tools own vector-store code.
 
+`brain_lab_core.api` adds a generic control plane for HTTP/OpenAPI and MCP surfaces:
+
+- `FoundationControlPlane` exposes tool-neutral operations for registered tools, job create/poll/resume/cancel, job artifacts, artifact metadata/content, search, answer stubs with citations, health, and secret-safe config/status.
+- `FoundationMCPTools` is a thin MCP-facing facade over the same control plane, so Hermes integrations do not bypass the canonical SQLite ledger or provenance contracts.
+- `foundation_openapi_schema(...)` generates a deterministic OpenAPI document without importing a web framework.
+- `create_fastapi_app(...)` lazily imports FastAPI only when callers install `brain-lab-core[api]`; importing `brain_lab_core.api` itself has no web dependency.
+
 Every public contract is a frozen dataclass with constructor-time validation and deterministic JSON support:
 
 ```python
@@ -134,6 +141,37 @@ hits = facade.search(
 assert hits[0].evidence_refs[0].source_type == "transcript"
 ```
 
+## Generic API/MCP control plane
+
+The API layer is transport-neutral first: concrete HTTP or MCP servers inject registries, a `SQLiteArtifactLedger`, and job-plan factories, then route every operation through `FoundationControlPlane`.
+
+```python
+from pathlib import Path
+from brain_lab_core.api import FoundationMCPTools, create_fixture_control_plane, foundation_openapi_schema
+
+plane = create_fixture_control_plane(state_root=Path(".brain-lab-state"), config={"API_KEY": "secret"})
+mcp = FoundationMCPTools(plane)
+
+created = mcp.create_job({"tool_id": "fixture-tool", "job_id": "fixture-smoke"})
+polled = mcp.get_job("fixture-smoke")
+artifacts = mcp.list_job_artifacts("fixture-smoke")
+schema = foundation_openapi_schema(plane)
+
+assert created["job"]["state"] == "completed"
+assert polled["events"]
+assert artifacts["artifacts"][0]["producer_tool_id"] == "fixture-tool"
+assert schema["paths"]["/jobs/{job_id}"]["get"]["operationId"] == "getJob"
+assert plane.config_status()["config"]["API_KEY"] == "[REDACTED]"
+```
+
+FastAPI remains optional:
+
+```python
+from brain_lab_core.api import create_fastapi_app
+
+app = create_fastapi_app(plane)  # requires: pip install brain-lab-core[api]
+```
+
 ## Extension-point packages
 
 The package also exposes importable namespaces for later foundation work:
@@ -141,11 +179,11 @@ The package also exposes importable namespaces for later foundation work:
 - `brain_lab_core.registry` — tool/provider registry (metadata-only capability discovery)
 - `brain_lab_core.orchestration` — job runner lifecycle, retries, resume/stale handling, leases, cancellation, and event stream
 - `brain_lab_core.retrieval` — Qdrant-style retrieval facade with cited payloads and freshness-aware search
-- `brain_lab_core.api` — control-plane/API surfaces
+- `brain_lab_core.api` — generic control plane, MCP facade, OpenAPI schema, and optional FastAPI adapter
 - `brain_lab_core.security` — security, secrets, and sandbox gates
 - `brain_lab_core.observability` — structured events and diagnostics
 
-Registry metadata discovery, the state ledger, generic job runner, and retrieval facade are implemented. The remaining extension namespaces stay placeholders until their owning issues; DH-204 does not implement API services, security gates, concrete Qdrant client wiring, or domain-specific ingest/chunk generation logic.
+Registry metadata discovery, the state ledger, generic job runner, retrieval facade, and generic API/MCP control plane are implemented. The remaining extension namespaces stay placeholders until their owning issues; this package still does not implement concrete Qdrant client wiring, production auth/sandbox gates, or domain-specific ingest/chunk generation logic.
 
 ## Development verification
 
