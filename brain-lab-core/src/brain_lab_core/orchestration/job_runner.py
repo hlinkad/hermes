@@ -267,19 +267,20 @@ class JobRunner:
     def mark_stage_stale(self, job_id: str, stage_id: str, *, reason: str = "stage marked stale") -> StageRun:
         """Mark a persisted stage stale so the next resume starts there."""
 
+        safe_reason = self._redact_text_for_job_id(str(job_id), str(reason or "stage marked stale"))
         stage = self._stage_by_id(job_id, stage_id)
         updated = replace(
             stage,
             state=LifecycleState.STALE,
-            metadata={**dict(stage.metadata), "stale_reason": reason},
+            metadata={**dict(stage.metadata), "stale_reason": safe_reason},
         )
         self._upsert_stage(job_id, updated)
-        self._record_stage_event(job_id, stage_id, "stage.stale", reason=reason)
+        self._record_stage_event(job_id, stage_id, "stage.stale", reason=safe_reason)
         job = self._get_job(job_id)
         self._upsert_job(
             replace(job, state=LifecycleState.STALE, stages=self._stage_runs_or_empty(job_id)),
             event_type="job.stale",
-            reason=reason,
+            reason=safe_reason,
         )
         return updated
 

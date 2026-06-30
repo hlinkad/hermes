@@ -332,7 +332,11 @@ class FoundationControlPlane:
         search_result = self.search(search_payload)
         if self._answer_handler is not None:
             handled = dict(self._answer_handler(payload, search_result))
-            return self._safe(handled)
+            return self._safe(
+                handled,
+                secret_names=self._known_job_secret_names(),
+                secret_values=self._known_job_secret_values(),
+            )
         citations = [_citation_from_hit(hit) for hit in search_result.get("hits", [])]
         return self._safe(
             {
@@ -349,10 +353,21 @@ class FoundationControlPlane:
 
     def _job_response(self, job_id: str) -> JsonObject:
         job = self.ledger.get_job(job_id)
+        job_data = job.to_dict()
         stages = [stage.to_dict() for stage in self.ledger.list_stage_runs(job_id)]
         events = [_event_to_dict(event) for event in self.runner.list_job_events(job_id)]
+        if self._redaction_values_unavailable(job_id):
+            job_data["metadata"] = _suppressed_metadata(job_data.get("metadata"))
+            for stage in stages:
+                stage["metadata"] = _suppressed_metadata(stage.get("metadata"))
+            for event in events:
+                event["reason"] = _REDACTED
+                event["payload"] = {"redaction_state": "secret_values_unavailable"}
+                trace = event.get("trace")
+                if isinstance(trace, dict):
+                    trace["attributes"] = {"redaction_state": "secret_values_unavailable"}
         return self._safe(
-            {"job": job.to_dict(), "stages": stages, "events": events},
+            {"job": job_data, "stages": stages, "events": events},
             secret_names=self._job_secret_names(job_id),
             secret_values=self._job_secret_values(job_id),
         )
@@ -778,6 +793,18 @@ def _optional_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ContractValidationError(f"{field_name} must be a mapping")
     return value
+
+
+def _suppressed_metadata(metadata: Any) -> dict[str, JsonValue]:
+    """Suppress arbitrary metadata when only secret names are available after restart."""
+
+    suppressed: dict[str, JsonValue] = {"redaction_state": "secret_values_unavailable"}
+    if isinstance(metadata, Mapping):
+        for key in ("secret_policy", "secret_names", "required_secret_names"):
+            value = metadata.get(key)
+            if value is not None:
+                suppressed[key] = redact_secrets(value)
+    return suppressed
 
 
 def _secret_names_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:

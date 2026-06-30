@@ -14,6 +14,7 @@ from brain_lab_core.contracts import (
     LifecycleState,
     Provenance,
     ResourceProfile,
+    StageRun,
     ToolManifest,
 )
 from brain_lab_core.observability import EvaluationHook, ObservabilityEvent, TraceContext
@@ -359,6 +360,62 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertNotIn(secret_value, serialized)
         self.assertIn(REDACTED, serialized)
 
+    def test_restarted_job_response_suppresses_legacy_free_text_when_secret_values_are_unavailable(self) -> None:
+        secret_value = "legacy-persisted-event-secret"
+        manifest = ToolManifest(
+            tool_id="legacy-redaction-fixture",
+            tool_version="0.1.0",
+            capabilities=("fixture.run",),
+            input_artifact_types=("source.url",),
+            output_artifact_types=("report.markdown",),
+            entrypoints={"python": "fixture:register"},
+            secret_declarations=(SecretDeclaration(name="LEGACY_TOKEN", required=True),),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = SQLiteArtifactLedger(Path(tmp) / "ledger.sqlite", artifact_root=Path(tmp) / "artifacts")
+            ledger.upsert_job(
+                Job(
+                    job_id="legacy-redaction-job",
+                    tool_id="legacy-redaction-fixture",
+                    state=LifecycleState.RUNNING,
+                    created_at="2026-06-30T00:00:00Z",
+                    metadata={
+                        "secret_policy": {"secret_names": ["LEGACY_TOKEN"]},
+                        "note": f"job metadata {secret_value}",
+                    },
+                )
+            )
+            ledger.upsert_stage_run(
+                "legacy-redaction-job",
+                StageRun(
+                    stage_id="legacy-stage",
+                    state=LifecycleState.RUNNING,
+                    metadata={"note": f"stage metadata {secret_value}"},
+                ),
+            )
+            ledger.record_event(
+                entity_type="job",
+                entity_id="legacy-redaction-job",
+                event_type="job.note",
+                reason=f"reason {secret_value}",
+                payload={"note": f"payload {secret_value}"},
+            )
+            restarted = FoundationControlPlane(
+                tool_registry=ToolRegistry([manifest]),
+                ledger=SQLiteArtifactLedger(Path(tmp) / "ledger.sqlite", artifact_root=Path(tmp) / "artifacts"),
+                config={},
+            )
+            response = restarted.get_job("legacy-redaction-job")
+
+        serialized = json.dumps(response, sort_keys=True)
+        self.assertNotIn(secret_value, serialized)
+        self.assertIn(REDACTED, serialized)
+        self.assertEqual(response["job"]["metadata"]["redaction_state"], "secret_values_unavailable")
+        self.assertEqual(response["stages"][0]["metadata"]["redaction_state"], "secret_values_unavailable")
+        self.assertEqual(response["events"][-1]["reason"], REDACTED)
+        self.assertEqual(response["events"][-1]["payload"]["redaction_state"], "secret_values_unavailable")
+
     def test_custom_search_handlers_apply_known_job_scoped_redaction(self) -> None:
         secret_value = "custom-search-plan-secret"
         manifest = ToolManifest(
@@ -402,6 +459,49 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertNotIn(secret_value, serialized)
         self.assertIn(REDACTED, serialized)
 
+    def test_custom_answer_handlers_apply_known_job_scoped_redaction(self) -> None:
+        secret_value = "custom-answer-plan-secret"
+        manifest = ToolManifest(
+            tool_id="custom-answer-fixture",
+            tool_version="0.1.0",
+            capabilities=("fixture.run",),
+            input_artifact_types=("source.url",),
+            output_artifact_types=("report.markdown",),
+            entrypoints={"python": "fixture:register"},
+            secret_declarations=(SecretDeclaration(name="PLAN_TOKEN", required=True),),
+        )
+
+        def factory(submission: object) -> JobPlan:
+            return JobPlan(
+                job_id="custom-answer-job",
+                tool_id="custom-answer-fixture",
+                config=submission.config,
+                stages=(StagePlan(stage_id="noop", handler=lambda _context: StageExecutionResult()),),
+            )
+
+        def answer_handler(_payload: object, _search_result: object) -> dict[str, object]:
+            return {"answer": f"leak {secret_value}", "details": {"nested": secret_value}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plane = FoundationControlPlane(
+                tool_registry=ToolRegistry([manifest]),
+                ledger=SQLiteArtifactLedger(Path(tmp) / "ledger.sqlite", artifact_root=Path(tmp) / "artifacts"),
+                job_plan_factories={"custom-answer-fixture": factory},
+                answer_handler=answer_handler,
+            )
+            plane.create_job(
+                {
+                    "tool_id": "custom-answer-fixture",
+                    "job_id": "custom-answer-job",
+                    "config": {"PLAN_TOKEN": secret_value},
+                }
+            )
+            response = plane.answer({"question": "leak", "collection_name": "default", "limit": 1})
+
+        serialized = json.dumps(response, sort_keys=True)
+        self.assertNotIn(secret_value, serialized)
+        self.assertIn(REDACTED, serialized)
+
     def test_cancel_reason_is_redacted_before_response_and_event_persistence(self) -> None:
         secret_value = "cancel-secret-token"
         with tempfile.TemporaryDirectory() as tmp:
@@ -432,6 +532,49 @@ class SecurityPolicyTests(unittest.TestCase):
             events = [event.__dict__ for event in ledger.list_events()]
 
         serialized = json.dumps({"response": response, "events": events}, sort_keys=True)
+        self.assertNotIn(secret_value, serialized)
+        self.assertIn(REDACTED, serialized)
+
+    def test_mark_stage_stale_reason_is_redacted_before_event_persistence(self) -> None:
+        secret_value = "stale-secret-token"
+        manifest = ToolManifest(
+            tool_id="stale-fixture",
+            tool_version="0.1.0",
+            capabilities=("fixture.run",),
+            input_artifact_types=("source.url",),
+            output_artifact_types=("report.markdown",),
+            entrypoints={"python": "fixture:register"},
+            secret_declarations=(SecretDeclaration(name="STALE_TOKEN", required=True),),
+        )
+
+        def factory(submission: object) -> JobPlan:
+            return JobPlan(
+                job_id="stale-job",
+                tool_id="stale-fixture",
+                config=submission.config,
+                stages=(StagePlan(stage_id="noop", handler=lambda _context: StageExecutionResult()),),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = SQLiteArtifactLedger(Path(tmp) / "ledger.sqlite", artifact_root=Path(tmp) / "artifacts")
+            plane = FoundationControlPlane(
+                tool_registry=ToolRegistry([manifest]),
+                ledger=ledger,
+                job_plan_factories={"stale-fixture": factory},
+            )
+            plane.create_job(
+                {
+                    "tool_id": "stale-fixture",
+                    "job_id": "stale-job",
+                    "config": {"STALE_TOKEN": secret_value},
+                }
+            )
+            plane.runner.mark_stage_stale("stale-job", "noop", reason=f"stale because {secret_value}")
+            events = [event.__dict__ for event in ledger.list_events()]
+            stages = [stage.to_dict() for stage in ledger.list_stage_runs("stale-job")]
+            response = plane.get_job("stale-job")
+
+        serialized = json.dumps({"events": events, "stages": stages, "response": response}, sort_keys=True)
         self.assertNotIn(secret_value, serialized)
         self.assertIn(REDACTED, serialized)
 
