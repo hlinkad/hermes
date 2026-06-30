@@ -50,7 +50,7 @@ class FilesystemArtifactStore:
             try:
                 return resolved.relative_to(self.root_path).as_posix()
             except ValueError:
-                pass
+                return resolved.as_uri()
         return resolved.as_uri()
 
 

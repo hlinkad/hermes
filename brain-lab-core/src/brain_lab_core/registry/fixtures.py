@@ -7,6 +7,7 @@ from typing import Any
 from brain_lab_core.contracts import ProviderCapability, ProviderSpec, ResourceProfile, ToolManifest
 from brain_lab_core.registry.adapter_registry import AdapterRegistry
 from brain_lab_core.registry.tool_registry import ToolRegistry
+from brain_lab_core.security import DependencyMetadata, SandboxPolicy, SecretDeclaration
 
 
 def fixture_tool_manifest(
@@ -18,6 +19,9 @@ def fixture_tool_manifest(
     output_artifact_types: tuple[str, ...] = ("fixture.records", "report.markdown"),
     entrypoints: Mapping[str, str] | None = None,
     required_secret_names: tuple[str, ...] = (),
+    secret_declarations: tuple[SecretDeclaration, ...] = (),
+    sandbox_policy: SandboxPolicy | Mapping[str, Any] | None = None,
+    dependency_metadata: tuple[DependencyMetadata, ...] = (),
     metadata: Mapping[str, Any] | None = None,
 ) -> ToolManifest:
     """Return a generic fake tool manifest used to prove the registry seam."""
@@ -33,6 +37,9 @@ def fixture_tool_manifest(
         resource_profile=ResourceProfile(cpu_cores=1.0, memory_mb=256, disk_mb=64, timeout_seconds=30),
         license_notes="MIT fixture only",
         required_secret_names=required_secret_names,
+        secret_declarations=secret_declarations,
+        sandbox_policy=SandboxPolicy.from_dict(sandbox_policy),
+        dependency_metadata=dependency_metadata,
         metadata={"fixture": True} if metadata is None else metadata,
     )
 

@@ -309,6 +309,10 @@ class SQLiteArtifactLedger:
             raise KeyError(job_id)
         return Job.from_dict(_loads(row["contract_json"]))
 
+    def list_jobs(self) -> tuple[Job, ...]:
+        rows = self._conn.execute("SELECT contract_json FROM jobs ORDER BY rowid").fetchall()
+        return tuple(Job.from_dict(_loads(row["contract_json"])) for row in rows)
+
     def upsert_stage_run(self, job_id: str, stage_run: StageRun | Mapping[str, Any]) -> None:
         # Ensure the owning job exists; stages are append/update state under that job.
         self.get_job(job_id)

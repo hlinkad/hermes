@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Mapping
 
+from brain_lab_core.security.policy import DependencyMetadata, SandboxPolicy, SecretDeclaration
+
 from .base import (
     CONTRACT_SCHEMA_VERSION,
     ContractDiagnostic,
@@ -106,6 +108,9 @@ class ToolManifest:
     resource_profile: ResourceProfile = field(default_factory=ResourceProfile)
     license_notes: str = ""
     required_secret_names: tuple[str, ...] = field(default_factory=tuple)
+    secret_declarations: tuple[SecretDeclaration, ...] = field(default_factory=tuple)
+    sandbox_policy: SandboxPolicy = field(default_factory=SandboxPolicy)
+    dependency_metadata: tuple[DependencyMetadata, ...] = field(default_factory=tuple)
     metadata: Mapping[str, Any] = field(default_factory=dict)
     schema_version: str = CONTRACT_SCHEMA_VERSION
 
@@ -133,7 +138,22 @@ class ToolManifest:
         object.__setattr__(self, "entrypoints", dict(sorted(entrypoints.items())))
         object.__setattr__(self, "resource_profile", ResourceProfile.from_dict(self.resource_profile))
         object.__setattr__(self, "license_notes", _optional_text(self.license_notes))
-        object.__setattr__(self, "required_secret_names", _string_tuple(self.required_secret_names))
+        secret_declarations = tuple(SecretDeclaration.from_dict(value) for value in self.secret_declarations)
+        declared_required_secret_names = tuple(
+            declaration.name for declaration in secret_declarations if declaration.required
+        )
+        object.__setattr__(
+            self,
+            "required_secret_names",
+            _string_tuple((*self.required_secret_names, *declared_required_secret_names)),
+        )
+        object.__setattr__(self, "secret_declarations", secret_declarations)
+        object.__setattr__(self, "sandbox_policy", SandboxPolicy.from_dict(self.sandbox_policy))
+        object.__setattr__(
+            self,
+            "dependency_metadata",
+            tuple(DependencyMetadata.from_dict(value) for value in self.dependency_metadata),
+        )
         object.__setattr__(self, "metadata", _metadata(self.metadata))
         object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
 
@@ -170,6 +190,10 @@ class ToolManifest:
                     location="entrypoints",
                 )
             )
+        diagnostics.extend(self.sandbox_policy.validate(resource_profile=self.resource_profile))
+        diagnostics.extend(_duplicate_secret_declaration_diagnostics(self.secret_declarations))
+        for dependency in self.dependency_metadata:
+            diagnostics.extend(dependency.validate())
         return tuple(diagnostics)
 
     def to_dict(self) -> dict[str, JsonValue]:
@@ -184,6 +208,9 @@ class ToolManifest:
             "resource_profile": self.resource_profile.to_dict(),
             "license_notes": self.license_notes,
             "required_secret_names": list(self.required_secret_names),
+            "secret_declarations": [declaration.to_dict() for declaration in self.secret_declarations],
+            "sandbox_policy": self.sandbox_policy.to_dict(),
+            "dependency_metadata": [dependency.to_dict() for dependency in self.dependency_metadata],
             "metadata": dict(self.metadata),
         }
 
@@ -211,6 +238,35 @@ class ToolManifest:
             resource_profile=ResourceProfile.from_dict(data.get("resource_profile", {})),
             license_notes=data.get("license_notes", ""),
             required_secret_names=tuple(data.get("required_secret_names", ())),
+            secret_declarations=tuple(
+                SecretDeclaration.from_dict(value) for value in data.get("secret_declarations", ())
+            ),
+            sandbox_policy=SandboxPolicy.from_dict(data.get("sandbox_policy", {})),
+            dependency_metadata=tuple(
+                DependencyMetadata.from_dict(value) for value in data.get("dependency_metadata", ())
+            ),
             metadata=data.get("metadata", {}),
             schema_version=data.get("schema_version", CONTRACT_SCHEMA_VERSION),
         )
+
+
+def _duplicate_secret_declaration_diagnostics(
+    declarations: tuple[SecretDeclaration, ...]
+) -> tuple[ContractDiagnostic, ...]:
+    names: set[str] = set()
+    duplicates: set[str] = set()
+    for declaration in declarations:
+        normalized = declaration.name.lower()
+        if normalized in names:
+            duplicates.add(declaration.name)
+        names.add(normalized)
+    if not duplicates:
+        return ()
+    return (
+        ContractDiagnostic(
+            code="tool_manifest.secret_declarations.duplicate",
+            message=f"duplicate secret declaration(s): {', '.join(sorted(duplicates))}",
+            severity="error",
+            location="secret_declarations",
+        ),
+    )

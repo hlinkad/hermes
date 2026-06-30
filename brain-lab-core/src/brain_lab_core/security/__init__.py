@@ -1,8 +1,38 @@
-"""Security, sandbox, secret, and redaction policy extension point.
-
-Future gates belong here; DH-200 only defines normalized error/provenance data
-that those gates can emit.
-"""
+"""Security, sandbox, secret, source-policy, and redaction helpers."""
 from __future__ import annotations
 
-__all__: list[str] = []
+from .policy import (
+    REDACTED,
+    DependencyMetadata,
+    FileAccessMode,
+    FileAccessPolicy,
+    NetworkAccessMode,
+    NetworkPolicy,
+    SandboxClass,
+    SandboxPolicy,
+    SecretDeclaration,
+    SourceLicensePolicy,
+    SourcePolicyStatus,
+    collect_secret_values,
+    is_secret_key,
+    redact_error_payload,
+    redact_secrets,
+)
+
+__all__ = [
+    "DependencyMetadata",
+    "FileAccessMode",
+    "FileAccessPolicy",
+    "NetworkAccessMode",
+    "NetworkPolicy",
+    "REDACTED",
+    "SandboxClass",
+    "SandboxPolicy",
+    "SecretDeclaration",
+    "SourceLicensePolicy",
+    "SourcePolicyStatus",
+    "collect_secret_values",
+    "is_secret_key",
+    "redact_error_payload",
+    "redact_secrets",
+]

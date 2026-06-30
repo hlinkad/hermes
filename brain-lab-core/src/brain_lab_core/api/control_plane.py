@@ -11,9 +11,8 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
-from enum import Enum
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +25,9 @@ from brain_lab_core.contracts import (
 )
 from brain_lab_core.contracts.base import JsonValue
 from brain_lab_core.orchestration import ArtifactContract, JobPlan, JobRunner, StageExecutionResult, StagePlan
+from brain_lab_core.observability import ObservabilityEvent
 from brain_lab_core.registry import AdapterRegistry, ToolRegistry, fixture_registries
+from brain_lab_core.security import REDACTED, collect_secret_values, is_secret_key, redact_secrets as _redact_secrets
 from brain_lab_core.state import SQLiteArtifactLedger
 
 JsonObject = dict[str, JsonValue]
@@ -34,25 +35,8 @@ JobPlanFactory = Callable[["JobSubmission"], JobPlan]
 SearchHandler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 AnswerHandler = Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]]
 
-_REDACTED = "[REDACTED]"
+_REDACTED = REDACTED
 _SAFE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
-_PUBLIC_SECRET_METADATA_KEYS = frozenset(
-    {"redaction_marker", "required_secret_names", "secret_names", "secret_policy"}
-)
-_SENSITIVE_KEY_FRAGMENTS = (
-    "api_key",
-    "apikey",
-    "auth_token",
-    "authorization",
-    "bearer",
-    "client_secret",
-    "credential",
-    "password",
-    "private_key",
-    "refresh_token",
-    "secret",
-    "token",
-)
 _SEARCH_STOPWORDS = frozenset(
     {
         "a",
@@ -154,6 +138,8 @@ class FoundationControlPlane:
         self._config = dict(config or {})
         self._job_plan_factories = dict(job_plan_factories or {})
         self._plans_by_job_id: dict[str, JobPlan] = {}
+        self._job_secret_names_by_job_id: dict[str, tuple[str, ...]] = {}
+        self._job_secret_values_by_job_id: dict[str, tuple[str, ...]] = {}
         self._job_ids_by_creation: list[str] = []
         self._search_handlers = dict(search_handlers or {})
         self._answer_handler = answer_handler
@@ -162,17 +148,18 @@ class FoundationControlPlane:
     def secret_names(self) -> tuple[str, ...]:
         names: set[str] = set()
         for key in self._config:
-            if _is_secret_key(key, ()):  # Config keys such as OPENAI_API_KEY should be named in policy.
+            if is_secret_key(key, ()):  # Config keys such as OPENAI_API_KEY should be named in policy.
                 names.add(str(key))
         for manifest in self.tool_registry.list_tools():
             names.update(manifest.required_secret_names)
+            names.update(declaration.name for declaration in manifest.secret_declarations)
         for provider in self.adapter_registry.list_providers():
             names.update(provider.required_secret_names)
         return tuple(sorted(names))
 
     @property
     def secret_values(self) -> tuple[str, ...]:
-        return tuple(sorted(_collect_secret_values(self._config, self.secret_names), key=len, reverse=True))
+        return tuple(sorted(collect_secret_values(self._config, self.secret_names), key=len, reverse=True))
 
     def healthz(self) -> JsonObject:
         return self._safe(
@@ -182,7 +169,7 @@ class FoundationControlPlane:
                 "ledger_schema_version": self.ledger.schema_version(),
                 "registered_tool_count": len(self.tool_registry),
                 "registered_provider_count": len(self.adapter_registry),
-                "known_job_count": len(self._job_ids_by_creation),
+                "known_job_count": len(self._known_job_ids()),
             }
         )
 
@@ -206,12 +193,13 @@ class FoundationControlPlane:
 
     def create_job(self, payload: Mapping[str, Any]) -> JsonObject:
         submission = JobSubmission.from_payload(payload)
-        self.tool_registry.get(submission.tool_id)
+        manifest = self.tool_registry.get(submission.tool_id)
+        job_exists = True
         try:
             self.ledger.get_job(submission.job_id)
         except KeyError:
-            pass
-        else:
+            job_exists = False
+        if job_exists:
             raise ContractValidationError(f"job_id {submission.job_id!r} already exists")
         try:
             factory = self._job_plan_factories[submission.tool_id]
@@ -224,6 +212,23 @@ class FoundationControlPlane:
             raise ContractValidationError("job plan factory changed the submitted job_id")
         if plan.tool_id != submission.tool_id:
             raise ContractValidationError("job plan factory changed the submitted tool_id")
+        job_secret_names = self._secret_names_for_manifest(manifest)
+        job_secret_values = tuple(
+            sorted(
+                collect_secret_values(self._config, job_secret_names)
+                | collect_secret_values(plan.config, job_secret_names),
+                key=len,
+                reverse=True,
+            )
+        )
+        plan = self._attach_job_secret_policy(plan, job_secret_names)
+        self._job_secret_names_by_job_id[plan.job_id] = job_secret_names
+        self._job_secret_values_by_job_id[plan.job_id] = job_secret_values
+        self.runner.set_redaction_policy(
+            plan.job_id,
+            secret_names=job_secret_names,
+            secret_values=job_secret_values,
+        )
         self._plans_by_job_id[plan.job_id] = plan
         if plan.job_id not in self._job_ids_by_creation:
             self._job_ids_by_creation.append(plan.job_id)
@@ -254,26 +259,46 @@ class FoundationControlPlane:
                 "reason": f"job is already {job.state.value}",
             }
             response.update(self._job_response(normalized))
-            return self._safe(response)
+            return self._safe(
+                response,
+                secret_names=self._job_secret_names(normalized),
+                secret_values=self._job_secret_values(normalized),
+            )
         self.runner.request_cancel(normalized, reason=reason)
         response = {"job_id": normalized, "cancel_requested": True, "reason": reason}
         response.update(self._job_response(normalized))
-        return self._safe(response)
+        return self._safe(
+            response,
+            secret_names=self._job_secret_names(normalized),
+            secret_values=self._job_secret_values(normalized),
+        )
 
     def list_job_artifacts(self, job_id: str) -> JsonObject:
         normalized = _required_text(job_id, "job_id")
         self.ledger.get_job(normalized)
-        artifacts = [self.ledger.get_artifact(artifact_id).to_dict() for artifact_id in self._job_artifact_ids(normalized)]
-        return self._safe({"job_id": normalized, "artifacts": artifacts})
+        artifacts = [
+            self._artifact_to_safe_dict(self.ledger.get_artifact(artifact_id), normalized)
+            for artifact_id in self._job_artifact_ids(normalized)
+        ]
+        return self._safe(
+            {"job_id": normalized, "artifacts": artifacts},
+            secret_names=self._job_secret_names(normalized),
+            secret_values=self._job_secret_values(normalized),
+        )
 
     def get_artifact(self, artifact_id: ArtifactId | str | Mapping[str, Any], *, include_content: bool = False) -> JsonObject:
         normalized = ArtifactId.from_dict(artifact_id)
         artifact = self.ledger.get_artifact(normalized)
-        response: dict[str, Any] = {"artifact": artifact.to_dict()}
+        job_id = self._artifact_job_id(normalized)
+        response: dict[str, Any] = {"artifact": self._artifact_to_safe_dict(artifact, job_id)}
         if include_content:
             path = self.ledger.get_artifact_path(normalized)
-            response["content"] = _read_text_if_small(path)
-        return self._safe(response)
+            response["content"] = _REDACTED if self._redaction_values_unavailable(job_id) else _read_text_if_small(path)
+        return self._safe(
+            response,
+            secret_names=self._job_secret_names(job_id) if job_id else (),
+            secret_values=self._job_secret_values(job_id) if job_id else (),
+        )
 
     def search(self, payload: Mapping[str, Any]) -> JsonObject:
         if not isinstance(payload, Mapping):
@@ -286,7 +311,11 @@ class FoundationControlPlane:
         handler = self._search_handlers.get(collection_name)
         if handler is not None:
             handled = dict(handler({**dict(payload), "query": query, "collection_name": collection_name, "limit": limit}))
-            return self._safe(handled)
+            return self._safe(
+                handled,
+                secret_names=self._known_job_secret_names(),
+                secret_values=self._known_job_secret_values(),
+            )
         return self._safe(self._ledger_text_search(query=query, collection_name=collection_name, limit=limit))
 
     def answer(self, payload: Mapping[str, Any]) -> JsonObject:
@@ -322,7 +351,11 @@ class FoundationControlPlane:
         job = self.ledger.get_job(job_id)
         stages = [stage.to_dict() for stage in self.ledger.list_stage_runs(job_id)]
         events = [_event_to_dict(event) for event in self.runner.list_job_events(job_id)]
-        return self._safe({"job": job.to_dict(), "stages": stages, "events": events})
+        return self._safe(
+            {"job": job.to_dict(), "stages": stages, "events": events},
+            secret_names=self._job_secret_names(job_id),
+            secret_values=self._job_secret_values(job_id),
+        )
 
     def _job_artifact_ids(self, job_id: str) -> tuple[ArtifactId, ...]:
         by_qualified: dict[str, ArtifactId] = {}
@@ -331,6 +364,24 @@ class FoundationControlPlane:
                 normalized = ArtifactId.from_dict(artifact_id)
                 by_qualified[normalized.qualified] = normalized
         return tuple(by_qualified[key] for key in sorted(by_qualified))
+
+    def _known_job_ids(self) -> tuple[str, ...]:
+        by_id: dict[str, str] = {job_id: job_id for job_id in self._job_ids_by_creation}
+        list_jobs = getattr(self.ledger, "list_jobs", None)
+        if callable(list_jobs):
+            for job in list_jobs():
+                by_id[job.job_id] = job.job_id
+        return tuple(by_id[key] for key in sorted(by_id))
+
+    def _artifact_job_id(self, artifact_id: ArtifactId) -> str:
+        qualified = artifact_id.qualified
+        for job_id in self._known_job_ids():
+            try:
+                if any(candidate.qualified == qualified for candidate in self._job_artifact_ids(job_id)):
+                    return job_id
+            except KeyError:
+                continue
+        return ""
 
     def _all_known_artifact_ids(self) -> tuple[ArtifactId, ...]:
         list_artifacts = getattr(self.ledger, "list_artifacts", None)
@@ -357,28 +408,35 @@ class FoundationControlPlane:
             if artifact_collection != collection_name:
                 continue
             path = self.ledger.get_artifact_path(artifact_id)
-            text = _read_text_if_small(path) or ""
-            artifact_document = json.dumps(artifact.to_dict(), sort_keys=True)
+            job_id = self._artifact_job_id(artifact_id)
+            text = "" if self._redaction_values_unavailable(job_id) else (_read_text_if_small(path) or "")
+            artifact_ref = self._artifact_to_safe_dict(artifact, job_id)
+            artifact_document = json.dumps(artifact_ref, sort_keys=True)
             searchable = f"{artifact_id.qualified}\n{text}\n{artifact_document}".lower()
             matched_terms = tuple(term for term in terms if term in searchable)
             if terms and not matched_terms:
                 continue
             score = float(sum(searchable.count(term) for term in matched_terms) or 1)
-            hits.append(
-                {
-                    "chunk_id": artifact.artifact_id.qualified,
-                    "score": score,
-                    "text": text[:500],
-                    "artifact_ref": artifact.to_dict(),
-                    "evidence_refs": [],
-                    "payload": {
-                        "collection_name": collection_name,
-                        "artifact_id": artifact.artifact_id.qualified,
-                        "artifact_freshness": artifact.freshness.value,
-                        "matched_terms": list(matched_terms),
-                    },
-                }
-            )
+            hit = {
+                "chunk_id": artifact.artifact_id.qualified,
+                "score": score,
+                "text": _REDACTED if self._redaction_values_unavailable(job_id) else text[:500],
+                "artifact_ref": artifact_ref,
+                "evidence_refs": [],
+                "payload": {
+                    "collection_name": collection_name,
+                    "artifact_id": artifact.artifact_id.qualified,
+                    "artifact_freshness": artifact.freshness.value,
+                    "matched_terms": list(matched_terms),
+                },
+            }
+            if job_id:
+                hit = self._safe(
+                    hit,
+                    secret_names=self._job_secret_names(job_id),
+                    secret_values=self._job_secret_values(job_id),
+                )
+            hits.append(hit)
         hits.sort(key=lambda hit: (-float(hit["score"]), str(hit["chunk_id"])))
         return {
             "query": query,
@@ -387,8 +445,99 @@ class FoundationControlPlane:
             "search_state": "ledger_text_fallback",
         }
 
-    def _safe(self, payload: Any) -> JsonObject:
-        safe = redact_secrets(payload, secret_names=self.secret_names, secret_values=self.secret_values)
+    def _secret_names_for_manifest(self, manifest: Any) -> tuple[str, ...]:
+        names: set[str] = set()
+        names.update(getattr(manifest, "required_secret_names", ()))
+        names.update(declaration.name for declaration in getattr(manifest, "secret_declarations", ()))
+        return tuple(sorted(str(name) for name in names if str(name).strip()))
+
+    def _attach_job_secret_policy(self, plan: JobPlan, secret_names: Iterable[str]) -> JobPlan:
+        names = set(_secret_names_from_metadata(plan.metadata))
+        names.update(str(name) for name in secret_names if str(name).strip())
+        if not names:
+            return plan
+        metadata = dict(plan.metadata)
+        current_policy = metadata.get("secret_policy") if isinstance(metadata.get("secret_policy"), Mapping) else {}
+        policy = dict(current_policy or {})
+        policy["redacted"] = True
+        policy["redaction_marker"] = _REDACTED
+        policy["secret_names"] = sorted(set(_string_values(policy.get("secret_names", ()))) | names)
+        metadata["secret_policy"] = policy
+        return replace(plan, metadata=metadata)
+
+    def _job_secret_names(self, job_id: str) -> tuple[str, ...]:
+        names = set(self._job_secret_names_by_job_id.get(job_id, ()))
+        plan = self._plans_by_job_id.get(job_id)
+        if plan is not None:
+            names.update(_secret_names_from_metadata(plan.metadata))
+        existing_job = None
+        try:
+            existing_job = self.ledger.get_job(job_id)
+        except KeyError:
+            existing_job = None
+        if existing_job is not None:
+            names.update(_secret_names_from_metadata(existing_job.metadata))
+        return tuple(sorted(str(name) for name in names if str(name).strip()))
+
+    def _job_secret_values(self, job_id: str) -> tuple[str, ...]:
+        names = self._job_secret_names(job_id)
+        values = set(self._job_secret_values_by_job_id.get(job_id, ()))
+        values.update(collect_secret_values(self._config, names))
+        plan = self._plans_by_job_id.get(job_id)
+        if plan is not None:
+            values.update(collect_secret_values(plan.config, names))
+        return tuple(sorted(values, key=len, reverse=True))
+
+    def _known_job_secret_names(self) -> tuple[str, ...]:
+        names: set[str] = set()
+        for job_id in self._known_job_ids():
+            names.update(self._job_secret_names(job_id))
+        return tuple(sorted(names))
+
+    def _known_job_secret_values(self) -> tuple[str, ...]:
+        values: set[str] = set()
+        for job_id in self._known_job_ids():
+            values.update(self._job_secret_values(job_id))
+        return tuple(sorted(values, key=len, reverse=True))
+
+    def _redaction_values_unavailable(self, job_id: str) -> bool:
+        return bool(job_id and self._job_secret_names(job_id) and not self._job_secret_values(job_id))
+
+    def _artifact_to_safe_dict(self, artifact: Any, job_id: str) -> JsonObject:
+        data = artifact.to_dict()
+        if self._redaction_values_unavailable(job_id):
+            data["uri"] = _REDACTED
+            data["metadata"] = {"redaction_state": "secret_values_unavailable"}
+            provenance = data.get("provenance")
+            if isinstance(provenance, dict):
+                redacted_provenance = dict(provenance)
+                redacted_provenance["source_url"] = _REDACTED
+                redacted_provenance["license_url"] = _REDACTED
+                redacted_provenance["source_policy_notes"] = _REDACTED
+                redacted_provenance["metadata"] = {"redaction_state": "secret_values_unavailable"}
+                data["provenance"] = redacted_provenance
+        return self._safe(
+            data,
+            secret_names=self._job_secret_names(job_id) if job_id else (),
+            secret_values=self._job_secret_values(job_id) if job_id else (),
+        )
+
+    def _safe(
+        self,
+        payload: Any,
+        *,
+        secret_names: Iterable[str] = (),
+        secret_values: Iterable[str] = (),
+    ) -> JsonObject:
+        all_secret_names = set(self.secret_names)
+        all_secret_names.update(str(name) for name in secret_names if str(name).strip())
+        all_secret_values = set(self.secret_values)
+        all_secret_values.update(str(value) for value in secret_values if isinstance(value, str))
+        safe = redact_secrets(
+            payload,
+            secret_names=tuple(sorted(all_secret_names)),
+            secret_values=tuple(sorted(all_secret_values, key=len, reverse=True)),
+        )
         if not isinstance(safe, dict):
             raise ContractValidationError("control-plane response must be a JSON object")
         return safe
@@ -606,92 +755,7 @@ def redact_secrets(
 ) -> JsonValue:
     """Return a JSON-safe copy with secret-looking fields and known secret values redacted."""
 
-    normalized_secret_names = {str(name).lower() for name in secret_names}
-    normalized_secret_values = _normalize_secret_values(secret_values)
-    return _redact_json(_json_safe(value), normalized_secret_names, normalized_secret_values)
-
-
-def _redact_json(value: JsonValue, secret_names: set[str], secret_values: tuple[str, ...]) -> JsonValue:
-    if isinstance(value, dict):
-        redacted: dict[str, JsonValue] = {}
-        for key, item in value.items():
-            if _is_secret_key(key, secret_names):
-                redacted[key] = _REDACTED
-            else:
-                redacted[key] = _redact_json(item, secret_names, secret_values)
-        return redacted
-    if isinstance(value, list):
-        return [_redact_json(item, secret_names, secret_values) for item in value]
-    if isinstance(value, str):
-        return _redact_secret_text(value, secret_values)
-    return value
-
-
-def _json_safe(value: Any) -> JsonValue:
-    if value is None or isinstance(value, bool | int | str):
-        return value
-    if isinstance(value, float):
-        if not (-float("inf") < value < float("inf")):
-            return str(value)
-        return value
-    if isinstance(value, Enum):
-        return _json_safe(value.value)
-    if isinstance(value, Mapping):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, set | frozenset):
-        return [_json_safe(item) for item in sorted(value, key=str)]
-    to_dict = getattr(value, "to_dict", None)
-    if callable(to_dict):
-        return _json_safe(to_dict())
-    return str(value)
-
-
-def _is_secret_key(key: str, secret_names: Collection[str]) -> bool:
-    lowered = str(key).lower()
-    if lowered in _PUBLIC_SECRET_METADATA_KEYS:
-        return False
-    if lowered in secret_names:
-        return True
-    return any(fragment in lowered for fragment in _SENSITIVE_KEY_FRAGMENTS)
-
-
-def _normalize_secret_values(secret_values: Iterable[str]) -> tuple[str, ...]:
-    values = {
-        str(value)
-        for value in secret_values
-        if isinstance(value, str) and len(value) >= 4 and value != _REDACTED
-    }
-    return tuple(sorted(values, key=len, reverse=True))
-
-
-def _collect_secret_values(value: Any, secret_names: Collection[str], *, secret_context: bool = False) -> set[str]:
-    values: set[str] = set()
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            values.update(
-                _collect_secret_values(
-                    item,
-                    secret_names,
-                    secret_context=secret_context or _is_secret_key(str(key), secret_names),
-                )
-            )
-        return values
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        for item in value:
-            values.update(_collect_secret_values(item, secret_names, secret_context=secret_context))
-        return values
-    if secret_context and isinstance(value, str) and len(value) >= 4 and value != _REDACTED:
-        values.add(value)
-    return values
-
-
-def _redact_secret_text(value: str, secret_values: tuple[str, ...]) -> str:
-    redacted = value
-    for secret_value in secret_values:
-        redacted = redacted.replace(secret_value, _REDACTED)
-    return redacted
+    return _redact_secrets(value, secret_names=secret_names, secret_values=secret_values)
 
 
 def _validate_safe_identifier(value: str, field_name: str) -> None:
@@ -716,6 +780,28 @@ def _optional_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     return value
 
 
+def _secret_names_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
+    names = set(_string_values(metadata.get("required_secret_names", ())))
+    names.update(_string_values(metadata.get("secret_names", ())))
+    policy = metadata.get("secret_policy")
+    if isinstance(policy, Mapping):
+        names.update(_string_values(policy.get("secret_names", ())))
+    return tuple(sorted(names))
+
+
+def _string_values(value: Any) -> tuple[str, ...]:
+    if value is None or value == "":
+        return ()
+    if isinstance(value, str):
+        raw_values = (value,)
+    else:
+        try:
+            raw_values = tuple(value)
+        except TypeError:
+            raw_values = (value,)
+    return tuple(dict.fromkeys(str(item).strip() for item in raw_values if str(item).strip()))
+
+
 def _positive_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ContractValidationError(f"{field_name} must be an integer")
@@ -725,15 +811,7 @@ def _positive_int(value: Any, field_name: str) -> int:
 
 
 def _event_to_dict(event: Any) -> dict[str, Any]:
-    return {
-        "event_id": event.event_id,
-        "created_at": event.created_at,
-        "entity_type": event.entity_type,
-        "entity_id": event.entity_id,
-        "event_type": event.event_type,
-        "reason": event.reason,
-        "payload": event.payload or {},
-    }
+    return ObservabilityEvent.from_ledger_event(event).to_dict()
 
 
 def _search_terms(query: str) -> tuple[str, ...]:

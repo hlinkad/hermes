@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar, Mapping
 
+from brain_lab_core.security.policy import SourcePolicyStatus
+
 from .base import (
     CONTRACT_SCHEMA_VERSION,
     ContractValidationError,
@@ -147,6 +149,12 @@ class Provenance:
     provider_id: str = ""
     provider_version: str = ""
     source_refs: tuple[str, ...] = field(default_factory=tuple)
+    source_name: str = ""
+    source_url: str = ""
+    license_name: str = ""
+    license_url: str = ""
+    source_policy_status: SourcePolicyStatus = SourcePolicyStatus.UNKNOWN
+    source_policy_notes: str = ""
     created_at: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
     schema_version: str = CONTRACT_SCHEMA_VERSION
@@ -159,6 +167,16 @@ class Provenance:
         object.__setattr__(self, "provider_id", _optional_text(self.provider_id))
         object.__setattr__(self, "provider_version", _optional_text(self.provider_version))
         object.__setattr__(self, "source_refs", _string_tuple(self.source_refs))
+        object.__setattr__(self, "source_name", _optional_text(self.source_name))
+        object.__setattr__(self, "source_url", _optional_text(self.source_url))
+        object.__setattr__(self, "license_name", _optional_text(self.license_name))
+        object.__setattr__(self, "license_url", _optional_text(self.license_url))
+        object.__setattr__(
+            self,
+            "source_policy_status",
+            _enum_value(SourcePolicyStatus, self.source_policy_status, "provenance.source_policy_status"),
+        )
+        object.__setattr__(self, "source_policy_notes", _optional_text(self.source_policy_notes))
         object.__setattr__(self, "created_at", _optional_text(self.created_at))
         object.__setattr__(self, "metadata", _metadata(self.metadata))
         object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
@@ -171,6 +189,12 @@ class Provenance:
             "provider_id": self.provider_id,
             "provider_version": self.provider_version,
             "source_refs": list(self.source_refs),
+            "source_name": self.source_name,
+            "source_url": self.source_url,
+            "license_name": self.license_name,
+            "license_url": self.license_url,
+            "source_policy_status": self.source_policy_status.value,
+            "source_policy_notes": self.source_policy_notes,
             "created_at": self.created_at,
             "metadata": dict(self.metadata),
         }
@@ -197,6 +221,12 @@ class Provenance:
             provider_id=data.get("provider_id", ""),
             provider_version=data.get("provider_version", ""),
             source_refs=tuple(data.get("source_refs", ())),
+            source_name=data.get("source_name", ""),
+            source_url=data.get("source_url", ""),
+            license_name=data.get("license_name", ""),
+            license_url=data.get("license_url", ""),
+            source_policy_status=data.get("source_policy_status", SourcePolicyStatus.UNKNOWN.value),
+            source_policy_notes=data.get("source_policy_notes", ""),
             created_at=data.get("created_at", ""),
             metadata=data.get("metadata", {}),
             schema_version=data.get("schema_version", CONTRACT_SCHEMA_VERSION),

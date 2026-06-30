@@ -19,6 +19,7 @@ from brain_lab_core.contracts import (
     RetryMetadata,
     StageRun,
 )
+from brain_lab_core.security import collect_secret_values, redact_secrets
 from brain_lab_core.state import LedgerEvent, SQLiteArtifactLedger, config_fingerprint
 
 from .planner import ArtifactContract, JobPlan, StagePlan
@@ -125,24 +126,30 @@ class StageContext:
             if provenance is not None
             else Provenance(tool_id=self.plan.tool_id, stage_id=self.stage_plan.stage_id)
         )
+        safe_provenance = Provenance.from_dict(
+            self.runner._redact_for_plan(self.plan, normalized_provenance.to_dict())
+        )
+        safe_metadata = self.runner._redact_mapping_for_plan(self.plan, metadata or {})
+        safe_artifact_uri = self.runner._redact_text_for_plan(self.plan, artifact_uri) if artifact_uri is not None else None
         result = self.ledger.register_artifact_from_file(
             artifact_id=normalized_id,
             artifact_type=contract.artifact_type,
             artifact_schema_version=contract.artifact_schema_version,
             file_path=file_path,
-            artifact_uri=artifact_uri,
+            artifact_uri=safe_artifact_uri,
             producer_tool_id=self.plan.tool_id,
             producer_stage_id=self.stage_plan.stage_id,
             input_artifact_ids=self.stage_plan.input_artifact_ids,
             config=self.plan.config if config is None else config,
-            provenance=normalized_provenance,
-            metadata=metadata or {},
+            provenance=safe_provenance,
+            metadata=safe_metadata,
         )
         self._registered_output_ids.append(result.artifact.artifact_id)
         self.runner._record_stage_event(
             self.plan.job_id,
             self.stage_plan.stage_id,
             "stage.output_registered",
+            plan=self.plan,
             payload={
                 "artifact_id": result.artifact.artifact_id.to_dict(),
                 "artifact_type": result.artifact.artifact_type,
@@ -163,7 +170,7 @@ class StageContext:
             raise ContractValidationError("progress must be a number between 0 and 1")
         self._progress = normalized
         if message:
-            self._metadata["progress_message"] = str(message)
+            self._metadata["progress_message"] = self.runner._redact_text_for_plan(self.plan, message)
         stage = StageRun(
             stage_id=self.stage_plan.stage_id,
             state=LifecycleState.RUNNING,
@@ -176,13 +183,14 @@ class StageContext:
             ),
             lease_id=self.lease_id,
             progress=normalized,
-            metadata=self._metadata,
+            metadata=self.runner._redact_mapping_for_plan(self.plan, self._metadata),
         )
-        self.runner._upsert_stage(self.plan.job_id, stage)
+        self.runner._upsert_stage(self.plan.job_id, stage, plan=self.plan)
         self.runner._record_stage_event(
             self.plan.job_id,
             self.stage_plan.stage_id,
             "stage.progress",
+            plan=self.plan,
             payload={"progress": normalized, "message": message, "lease_id": self.lease_id},
         )
 
@@ -203,16 +211,40 @@ class JobRunner:
     def __init__(self, ledger: SQLiteArtifactLedger) -> None:
         self.ledger = ledger
         self._cancel_requested: dict[str, str] = {}
+        self._redaction_secret_names_by_job_id: dict[str, tuple[str, ...]] = {}
+        self._redaction_secret_values_by_job_id: dict[str, tuple[str, ...]] = {}
+
+    def set_redaction_policy(
+        self,
+        job_id: str,
+        *,
+        secret_names: Iterable[str] = (),
+        secret_values: Iterable[str] = (),
+    ) -> None:
+        """Install a private, per-job redaction context without exposing values in contracts."""
+
+        normalized = str(job_id)
+        self._redaction_secret_names_by_job_id[normalized] = tuple(
+            sorted(str(name) for name in secret_names if str(name).strip())
+        )
+        self._redaction_secret_values_by_job_id[normalized] = tuple(
+            sorted(
+                {str(value) for value in secret_values if isinstance(value, str) and value},
+                key=len,
+                reverse=True,
+            )
+        )
 
     def request_cancel(self, job_id: str, reason: str = "canceled") -> None:
         """Request cooperative cancellation before or during a later stage check."""
 
-        self._cancel_requested[str(job_id)] = str(reason or "canceled")
+        safe_reason = self._redact_text_for_job_id(str(job_id), str(reason or "canceled"))
+        self._cancel_requested[str(job_id)] = safe_reason
         self.ledger.record_event(
             entity_type="job",
             entity_id=str(job_id),
             event_type="job.cancel_requested",
-            reason=str(reason or "canceled"),
+            reason=safe_reason,
         )
 
     def cancellation_reason(self, job_id: str) -> str | None:
@@ -268,7 +300,7 @@ class JobRunner:
         normalized = plan if isinstance(plan, JobPlan) else JobPlan(**dict(plan))
         existing_job = self._get_job_or_none(normalized.job_id)
         if existing_job is None or not resume:
-            stage_runs = tuple(self._pending_stage(stage) for stage in normalized.stages)
+            stage_runs = tuple(self._pending_stage(stage, normalized) for stage in normalized.stages)
             job = Job(
                 job_id=normalized.job_id,
                 tool_id=normalized.tool_id,
@@ -277,20 +309,21 @@ class JobRunner:
                 stages=stage_runs,
                 input_artifact_ids=normalized.input_artifact_ids,
                 config_fingerprint=config_fingerprint(normalized.config),
-                metadata=normalized.metadata,
+                metadata=self._redact_mapping_for_plan(normalized, normalized.metadata),
             )
-            self._upsert_job(job, event_type="job.created")
+            self._upsert_job(job, event_type="job.created", plan=normalized)
             for stage_run in stage_runs:
-                self._upsert_stage(normalized.job_id, stage_run)
+                self._upsert_stage(normalized.job_id, stage_run, plan=normalized)
         else:
             job = existing_job
             stage_runs = self._merged_stage_runs(normalized)
             for stage_run in stage_runs:
-                self._upsert_stage(normalized.job_id, stage_run)
+                self._upsert_stage(normalized.job_id, stage_run, plan=normalized)
 
         job = self._upsert_job(
             replace(job, state=LifecycleState.RUNNING, stages=self._stage_runs_or_empty(normalized.job_id)),
             event_type="job.running",
+            plan=normalized,
         )
 
         for stage_plan in normalized.stages:
@@ -306,6 +339,7 @@ class JobRunner:
                     normalized.job_id,
                     stage_plan.stage_id,
                     "stage.skipped_current",
+                    plan=normalized,
                     payload={"state_preserved": LifecycleState.COMPLETED.value},
                 )
                 continue
@@ -314,16 +348,18 @@ class JobRunner:
                     normalized.job_id,
                     stage_plan.stage_id,
                     "stage.skipped_current",
+                    plan=normalized,
                     payload={"state_preserved": LifecycleState.SKIPPED.value},
                 )
                 continue
             if current_stage.state == LifecycleState.PENDING and self._outputs_current(normalized, stage_plan):
                 skipped = replace(current_stage, state=LifecycleState.SKIPPED, completed_at=_utc_now(), progress=1.0)
-                self._upsert_stage(normalized.job_id, skipped)
+                self._upsert_stage(normalized.job_id, skipped, plan=normalized)
                 self._record_stage_event(
                     normalized.job_id,
                     stage_plan.stage_id,
                     "stage.skipped_current",
+                    plan=normalized,
                     payload={"state": LifecycleState.SKIPPED.value},
                 )
                 continue
@@ -359,13 +395,14 @@ class JobRunner:
                 retry=RetryMetadata(attempt=attempt, max_attempts=stage_plan.retry_policy.max_attempts),
                 lease_id=lease_id,
                 progress=0.0,
-                metadata=stage_plan.metadata,
+                metadata=self._redact_mapping_for_plan(plan, stage_plan.metadata),
             )
-            self._upsert_stage(plan.job_id, running)
+            self._upsert_stage(plan.job_id, running, plan=plan)
             self._record_stage_event(
                 plan.job_id,
                 stage_plan.stage_id,
                 "stage.running",
+                plan=plan,
                 payload={"attempt": attempt, "lease_id": lease_id},
             )
             context = StageContext(
@@ -399,13 +436,14 @@ class JobRunner:
                     retry=RetryMetadata(attempt=attempt, max_attempts=stage_plan.retry_policy.max_attempts),
                     lease_id=lease_id,
                     progress=result.progress if result.progress is not None else context.progress,
-                    metadata={**context._metadata, **result.metadata},
+                    metadata=self._redact_mapping_for_plan(plan, {**context._metadata, **result.metadata}),
                 )
-                self._upsert_stage(plan.job_id, completed)
+                self._upsert_stage(plan.job_id, completed, plan=plan)
                 self._record_stage_event(
                     plan.job_id,
                     stage_plan.stage_id,
                     "stage.completed",
+                    plan=plan,
                     payload={
                         "attempt": attempt,
                         "lease_id": lease_id,
@@ -424,14 +462,23 @@ class JobRunner:
                     retry=RetryMetadata(attempt=attempt, max_attempts=stage_plan.retry_policy.max_attempts),
                     lease_id=lease_id,
                     progress=context.progress,
-                    metadata={
-                        **context._metadata,
-                        "cancellation_reason": exc.reason,
-                        "cleanup_policy": "artifacts_preserved_for_inspection",
-                    },
+                    metadata=self._redact_mapping_for_plan(
+                        plan,
+                        {
+                            **context._metadata,
+                            "cancellation_reason": exc.reason,
+                            "cleanup_policy": "artifacts_preserved_for_inspection",
+                        },
+                    ),
                 )
-                self._upsert_stage(plan.job_id, canceled)
-                self._record_stage_event(plan.job_id, stage_plan.stage_id, "stage.canceled", reason=exc.reason)
+                self._upsert_stage(plan.job_id, canceled, plan=plan)
+                self._record_stage_event(
+                    plan.job_id,
+                    stage_plan.stage_id,
+                    "stage.canceled",
+                    plan=plan,
+                    reason=exc.reason,
+                )
                 return canceled
             except StageExecutionError as exc:
                 envelope = exc.error
@@ -444,6 +491,7 @@ class JobRunner:
                 )
 
             retryable = stage_plan.retry_policy.is_retryable(envelope)
+            redacted_envelope = ErrorEnvelope.from_dict(self._redact_for_plan(plan, envelope.to_dict()))
             failed = StageRun(
                 stage_id=stage_plan.stage_id,
                 state=LifecycleState.FAILED,
@@ -455,19 +503,20 @@ class JobRunner:
                     attempt=attempt,
                     max_attempts=stage_plan.retry_policy.max_attempts,
                     retryable=retryable,
-                    last_error_code=envelope.code,
+                    last_error_code=redacted_envelope.code,
                 ),
                 lease_id=lease_id,
                 progress=context.progress,
-                metadata={"error": envelope.to_dict()},
+                metadata={"error": redacted_envelope.to_dict()},
             )
-            self._upsert_stage(plan.job_id, failed)
+            self._upsert_stage(plan.job_id, failed, plan=plan)
             self._record_stage_event(
                 plan.job_id,
                 stage_plan.stage_id,
                 "stage.failed",
-                reason=envelope.message,
-                payload={"attempt": attempt, "error": envelope.to_dict(), "retryable": retryable},
+                plan=plan,
+                reason=redacted_envelope.message,
+                payload={"attempt": attempt, "error": redacted_envelope.to_dict(), "retryable": retryable},
             )
             last_stage = failed
             if retryable and attempt < stage_plan.retry_policy.max_attempts:
@@ -475,11 +524,12 @@ class JobRunner:
                     plan.job_id,
                     stage_plan.stage_id,
                     "stage.retry_scheduled",
+                    plan=plan,
                     payload={
                         "attempt": attempt,
                         "next_attempt": attempt + 1,
                         "max_attempts": stage_plan.retry_policy.max_attempts,
-                        "error_code": envelope.code,
+                        "error_code": redacted_envelope.code,
                     },
                 )
                 continue
@@ -585,18 +635,19 @@ class JobRunner:
                 f"{artifact.config_fingerprint!r}; expected {expected_config_fingerprint!r}"
             )
 
-    def _pending_stage(self, stage_plan: StagePlan) -> StageRun:
+    def _pending_stage(self, stage_plan: StagePlan, plan: JobPlan | None = None) -> StageRun:
+        metadata = self._redact_mapping_for_plan(plan, stage_plan.metadata) if plan is not None else stage_plan.metadata
         return StageRun(
             stage_id=stage_plan.stage_id,
             state=LifecycleState.PENDING,
             input_artifact_ids=stage_plan.input_artifact_ids,
             retry=RetryMetadata(max_attempts=stage_plan.retry_policy.max_attempts),
-            metadata=stage_plan.metadata,
+            metadata=metadata,
         )
 
     def _merged_stage_runs(self, plan: JobPlan) -> tuple[StageRun, ...]:
         existing = {stage.stage_id: stage for stage in self._stage_runs_or_empty(plan.job_id)}
-        return tuple(existing.get(stage.stage_id, self._pending_stage(stage)) for stage in plan.stages)
+        return tuple(existing.get(stage.stage_id, self._pending_stage(stage, plan)) for stage in plan.stages)
 
     def _finish_canceled_before_stage(
         self, plan: JobPlan, stage_plan: StagePlan, reason: str, job: Job
@@ -606,15 +657,22 @@ class JobRunner:
             current_stage,
             state=LifecycleState.CANCELED,
             completed_at=_utc_now(),
-            metadata={**dict(current_stage.metadata), "cancellation_reason": reason},
+            metadata=self._redact_mapping_for_plan(plan, {**dict(current_stage.metadata), "cancellation_reason": reason}),
         )
-        self._upsert_stage(plan.job_id, canceled)
-        self._record_stage_event(job_id=plan.job_id, stage_id=stage_plan.stage_id, event_type="stage.canceled", reason=reason)
+        self._upsert_stage(plan.job_id, canceled, plan=plan)
+        self._record_stage_event(
+            job_id=plan.job_id,
+            stage_id=stage_plan.stage_id,
+            event_type="stage.canceled",
+            plan=plan,
+            reason=reason,
+        )
         self._cancel_requested.pop(plan.job_id, None)
         return self._upsert_job(
             replace(job, state=LifecycleState.CANCELED, stages=self._stage_runs_or_empty(plan.job_id)),
             event_type="job.canceled",
             reason=reason,
+            plan=plan,
         )
 
     def _finish_job(
@@ -638,11 +696,12 @@ class JobRunner:
                 stages=self._stage_runs_or_empty(plan.job_id),
                 input_artifact_ids=plan.input_artifact_ids,
                 config_fingerprint=config_fingerprint(plan.config),
-                metadata=plan.metadata,
+                metadata=self._redact_mapping_for_plan(plan, plan.metadata),
             ),
             event_type=event_type,
             reason=reason,
             payload=payload,
+            plan=plan,
         )
 
     def _get_job_or_none(self, job_id: str) -> Job | None:
@@ -666,6 +725,44 @@ class JobRunner:
                 return stage
         raise KeyError(f"{job_id}:{stage_id}")
 
+    def _secret_names_for_plan(self, plan: JobPlan) -> tuple[str, ...]:
+        metadata = plan.metadata
+        names = set(self._redaction_secret_names_by_job_id.get(plan.job_id, ()))
+        names.update(_string_values(metadata.get("required_secret_names", ())))
+        names.update(_string_values(metadata.get("secret_names", ())))
+        policy = metadata.get("secret_policy")
+        if isinstance(policy, Mapping):
+            names.update(_string_values(policy.get("secret_names", ())))
+        return tuple(sorted(names))
+
+    def _secret_values_for_plan(self, plan: JobPlan) -> tuple[str, ...]:
+        values = set(self._redaction_secret_values_by_job_id.get(plan.job_id, ()))
+        values.update(collect_secret_values(plan.config, self._secret_names_for_plan(plan)))
+        return tuple(sorted(values, key=len, reverse=True))
+
+    def _redact_for_plan(self, plan: JobPlan, value: Any) -> Any:
+        return redact_secrets(
+            value,
+            secret_names=self._secret_names_for_plan(plan),
+            secret_values=self._secret_values_for_plan(plan),
+        )
+
+    def _redact_mapping_for_plan(self, plan: JobPlan, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        redacted = self._redact_for_plan(plan, value)
+        return redacted if isinstance(redacted, Mapping) else {}
+
+    def _redact_text_for_plan(self, plan: JobPlan, value: object) -> str:
+        redacted = self._redact_for_plan(plan, str(value))
+        return redacted if isinstance(redacted, str) else ""
+
+    def _redact_text_for_job_id(self, job_id: str, value: object) -> str:
+        redacted = redact_secrets(
+            str(value),
+            secret_names=self._redaction_secret_names_by_job_id.get(str(job_id), ()),
+            secret_values=self._redaction_secret_values_by_job_id.get(str(job_id), ()),
+        )
+        return redacted if isinstance(redacted, str) else ""
+
     def _upsert_job(
         self,
         job: Job,
@@ -673,19 +770,24 @@ class JobRunner:
         event_type: str,
         reason: str = "",
         payload: Mapping[str, Any] | None = None,
+        plan: JobPlan | None = None,
     ) -> Job:
-        self.ledger.upsert_job(job)
+        safe_job = replace(job, metadata=self._redact_mapping_for_plan(plan, job.metadata)) if plan is not None else job
+        self.ledger.upsert_job(safe_job)
+        safe_reason = self._redact_text_for_plan(plan, reason) if plan is not None else reason
+        safe_payload = self._redact_mapping_for_plan(plan, payload or {"state": job.state.value}) if plan is not None else payload or {"state": job.state.value}
         self.ledger.record_event(
             entity_type="job",
             entity_id=job.job_id,
             event_type=event_type,
-            reason=reason,
-            payload=payload or {"state": job.state.value},
+            reason=safe_reason,
+            payload=safe_payload,
         )
-        return job
+        return safe_job
 
-    def _upsert_stage(self, job_id: str, stage: StageRun) -> None:
-        self.ledger.upsert_stage_run(job_id, stage)
+    def _upsert_stage(self, job_id: str, stage: StageRun, *, plan: JobPlan | None = None) -> None:
+        safe_stage = replace(stage, metadata=self._redact_mapping_for_plan(plan, stage.metadata)) if plan is not None else stage
+        self.ledger.upsert_stage_run(job_id, safe_stage)
 
     def _record_stage_event(
         self,
@@ -693,15 +795,18 @@ class JobRunner:
         stage_id: str,
         event_type: str,
         *,
+        plan: JobPlan | None = None,
         reason: str = "",
         payload: Mapping[str, Any] | None = None,
     ) -> None:
+        safe_reason = self._redact_text_for_plan(plan, reason) if plan is not None else reason
+        safe_payload = self._redact_mapping_for_plan(plan, payload or {}) if plan is not None else payload or {}
         self.ledger.record_event(
             entity_type="stage_run",
             entity_id=f"{job_id}:{stage_id}",
             event_type=event_type,
-            reason=reason,
-            payload=payload or {},
+            reason=safe_reason,
+            payload=safe_payload,
         )
 
 
@@ -712,6 +817,19 @@ def _merge_artifact_ids(*groups: tuple[ArtifactId, ...]) -> tuple[ArtifactId, ..
             normalized = ArtifactId.from_dict(artifact_id)
             by_qualified[normalized.qualified] = normalized
     return tuple(by_qualified[key] for key in sorted(by_qualified))
+
+
+def _string_values(value: Any) -> tuple[str, ...]:
+    if value is None or value == "":
+        return ()
+    if isinstance(value, str):
+        raw_values = (value,)
+    else:
+        try:
+            raw_values = tuple(value)
+        except TypeError:
+            raw_values = (value,)
+    return tuple(dict.fromkeys(str(item).strip() for item in raw_values if str(item).strip()))
 
 
 def _utc_now() -> str:
