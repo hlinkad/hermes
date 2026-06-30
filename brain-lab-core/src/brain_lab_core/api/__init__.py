@@ -11,6 +11,7 @@ from .control_plane import (
     FoundationControlPlane,
     JobSubmission,
     create_fixture_control_plane,
+    create_video_intel_fixture_control_plane,
     foundation_openapi_schema,
     redact_secrets,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "JobSubmission",
     "create_fastapi_app",
     "create_fixture_control_plane",
+    "create_video_intel_fixture_control_plane",
     "foundation_openapi_schema",
     "redact_secrets",
 ]

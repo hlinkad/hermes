@@ -11,6 +11,7 @@ from brain_lab_core.contracts import (
     ArtifactId,
     ArtifactRef,
     ContractValidationError,
+    EvidenceRef,
     ErrorEnvelope,
     FreshnessState,
     Job,
@@ -159,6 +160,30 @@ class StageContext:
             },
         )
         return result.artifact
+
+    def register_evidence_ref(self, evidence_ref: EvidenceRef | Mapping[str, Any]) -> EvidenceRef:
+        """Persist a redacted evidence reference from the current stage.
+
+        Evidence refs are small canonical ledger records, not file-backed
+        artifacts, so handlers need an explicit StageContext path that applies
+        the same per-job redaction policy used for artifacts, stages, and events.
+        """
+
+        normalized = EvidenceRef.from_dict(evidence_ref)
+        safe = EvidenceRef.from_dict(self.runner._redact_for_plan(self.plan, normalized.to_dict()))
+        self.ledger.upsert_evidence_ref(safe)
+        self.runner._record_stage_event(
+            self.plan.job_id,
+            self.stage_plan.stage_id,
+            "stage.evidence_ref_registered",
+            plan=self.plan,
+            payload={
+                "evidence_id": safe.evidence_id,
+                "source_artifact_id": safe.source_artifact_id.to_dict(),
+                "source_type": safe.source_type,
+            },
+        )
+        return safe
 
     def record_progress(self, progress: float, *, message: str = "") -> None:
         """Persist worker lease/progress for long local stage jobs."""

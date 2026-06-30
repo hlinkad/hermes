@@ -12,6 +12,7 @@ from brain_lab_core.api import (
     JobSubmission,
     create_fastapi_app,
     create_fixture_control_plane,
+    create_video_intel_fixture_control_plane,
     foundation_openapi_schema,
     redact_secrets,
 )
@@ -150,6 +151,95 @@ class ApiControlPlaneTests(unittest.TestCase):
 
         self.assertEqual(search["hits"][0]["payload"]["artifact_id"], "fixture:durable-search-job-report")
         self.assertEqual(wrong_collection["hits"], [])
+
+    def test_video_intel_fixture_runs_generic_job_artifact_evidence_and_search_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plane = create_video_intel_fixture_control_plane(state_root=Path(tmp))
+            mcp = FoundationMCPTools(plane)
+
+            tools = mcp.list_tools()
+            created = mcp.create_job(
+                {
+                    "tool_id": "video-intel",
+                    "job_id": "video-fixture-job",
+                    "inputs": {
+                        "source_url": "https://youtu.be/dh207",
+                        "title": "DH-207 fixture",
+                        "transcript": "video intel evidence regression coverage",
+                    },
+                }
+            )
+            artifacts = mcp.list_job_artifacts("video-fixture-job")
+            report = mcp.get_artifact("video-intel:video-fixture-job-report", include_content=True)
+            evidence = plane.ledger.get_evidence_ref("video-fixture-job-transcript-span-0")
+            search = mcp.search(
+                {"query": "evidence regression", "collection_name": "video-intel.reports", "limit": 3}
+            )
+
+        self.assertEqual(tools["tools"][0]["tool_id"], "video-intel")
+        self.assertEqual(created["job"]["state"], LifecycleState.COMPLETED.value)
+        self.assertEqual(
+            [stage["stage_id"] for stage in created["stages"]],
+            ["ingest", "transcribe", "build-chunks", "index-chunks", "synthesize"],
+        )
+        self.assertEqual(
+            {artifact["artifact_type"] for artifact in artifacts["artifacts"]},
+            {
+                "video.media_manifest",
+                "video.transcript",
+                "retrieval.chunks",
+                "retrieval.index_result",
+                "report.markdown",
+            },
+        )
+        self.assertEqual(evidence.source_artifact_id.qualified, "video-intel:video-fixture-job-transcript")
+        self.assertEqual(evidence.span.kind, "time")
+        self.assertEqual(report["artifact"]["metadata"]["evidence_ids"], ["video-fixture-job-transcript-span-0"])
+        self.assertIn("video intel evidence regression coverage", report["content"])
+        self.assertEqual(search["hits"][0]["artifact_ref"]["artifact_id"]["value"], "video-fixture-job-report")
+        self.assertIn("video intel evidence regression coverage", search["hits"][0]["text"])
+
+    def test_optional_video_intel_secret_is_redacted_without_suppressing_public_fixture_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plane = create_video_intel_fixture_control_plane(state_root=Path(tmp))
+            mcp = FoundationMCPTools(plane)
+
+            created = mcp.create_job(
+                {
+                    "tool_id": "video-intel",
+                    "job_id": "video-secret-job",
+                    "config": {"VIDEO_INTEL_SOURCE_TOKEN": "video-secret-token"},
+                    "inputs": {"transcript": "token should redact video-secret-token in responses"},
+                }
+            )
+            report = mcp.get_artifact("video-intel:video-secret-job-report", include_content=True)
+            search = mcp.search(
+                {"query": "video-secret-token", "collection_name": "video-intel.reports", "limit": 3}
+            )
+            answer = mcp.answer(
+                {"question": "Where is video-secret-token?", "collection_name": "video-intel.reports"}
+            )
+            evidence = plane.ledger.get_evidence_ref("video-secret-job-transcript-span-0")
+            config = mcp.config()
+
+        serialized = json.dumps(
+            {
+                "created": created,
+                "report": report,
+                "search": search,
+                "answer": answer,
+                "evidence": evidence.to_dict(),
+                "config": config,
+            },
+            sort_keys=True,
+        )
+        self.assertIn("VIDEO_INTEL_SOURCE_TOKEN", config["secret_policy"]["secret_names"])
+        self.assertNotIn("VIDEO_INTEL_SOURCE_TOKEN", config["config"])
+        self.assertNotIn("video-secret-token", serialized)
+        self.assertEqual(search["query"], "[REDACTED]")
+        self.assertEqual(answer["question"], "Where is [REDACTED]?")
+        self.assertEqual(evidence.quote, "token should redact [REDACTED] in responses")
+        self.assertIn("token should redact [REDACTED] in responses", report["content"])
 
     def test_control_plane_rejects_unsafe_or_duplicate_job_requests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

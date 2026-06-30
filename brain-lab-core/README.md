@@ -19,13 +19,14 @@ Generic AI Lab foundation contracts and package skeleton.
 - `ToolRegistry` registers `ToolManifest` declarations, validates package/CLI/container entrypoints, and indexes tools by capability plus input/output artifact type.
 - `AdapterRegistry` registers `ProviderSpec` declarations and indexes providers by capability/version plus input/output artifact type.
 - `fixture_tool_manifest()`, `fixture_provider_spec()`, and `register_fixture_tool()` provide a fake tool/provider seam for downstream integration tests.
+- `video_intel_tool_manifest()` publishes the video-intel DH-94..DH-103 integration boundary as metadata-only discovery: capabilities, artifact types, optional secret declaration, sandbox/network requirements, dependency metadata, and stage-contract mapping without importing or executing video-intel.
 
 `brain_lab_core.orchestration` adds the generic local job-runner surface:
 
 - `JobPlan`, `StagePlan`, and `ArtifactContract` validate explicit stage input/output contracts before execution.
 - `JobRunner` persists job/stage lifecycle through the SQLite ledger, including `pending`, `running`, `completed`, `failed`, `stale`, `canceled`, and `skipped` stage states.
 - `RetryPolicy` classifies retryable/non-retryable exact or prefix-wildcard error codes and honors normalized `ErrorEnvelope.retryable` flags.
-- `StageContext` gives concrete handlers a safe way to register declared outputs, record progress/lease updates, and cooperatively cancel without deleting inspectable state/artifacts.
+- `StageContext` gives concrete handlers a safe way to register declared outputs and evidence refs, record progress/lease updates, and cooperatively cancel without deleting inspectable state/artifacts.
 - `JobRunner.list_job_events(job_id)` returns append-only job/stage events from the ledger for API/MCP consumers.
 
 `brain_lab_core.retrieval` adds the dependency-free Qdrant-style retrieval facade:
@@ -43,6 +44,7 @@ Generic AI Lab foundation contracts and package skeleton.
 - `FoundationMCPTools` is a thin MCP-facing facade over the same control plane, so Hermes integrations do not bypass the canonical SQLite ledger or provenance contracts.
 - `foundation_openapi_schema(...)` generates a deterministic OpenAPI document without importing a web framework.
 - `create_fastapi_app(...)` lazily imports FastAPI only when callers install `brain-lab-core[api]`; importing `brain_lab_core.api` itself has no web dependency.
+- `create_fixture_control_plane(...)` and `create_video_intel_fixture_control_plane(...)` build deterministic local fixtures that exercise the same API/MCP, ledger, artifact, evidence, and redaction paths concrete tools use.
 
 Every public contract is a frozen dataclass with constructor-time validation and deterministic JSON support:
 
@@ -162,6 +164,28 @@ assert polled["events"]
 assert artifacts["artifacts"][0]["producer_tool_id"] == "fixture-tool"
 assert schema["paths"]["/jobs/{job_id}"]["get"]["operationId"] == "getJob"
 assert plane.config_status()["config"]["API_KEY"] == "[REDACTED]"
+```
+
+The video-intel integration fixture exercises the same foundation seam without
+requiring media downloads, ASR binaries, frame models, or Qdrant:
+
+```python
+from pathlib import Path
+from brain_lab_core.api import FoundationMCPTools, create_video_intel_fixture_control_plane
+
+plane = create_video_intel_fixture_control_plane(state_root=Path(".brain-lab-video-fixture"))
+mcp = FoundationMCPTools(plane)
+created = mcp.create_job({"tool_id": "video-intel", "job_id": "video-smoke"})
+artifacts = mcp.list_job_artifacts("video-smoke")
+search = mcp.search({"query": "evidence", "collection_name": "video-intel.reports"})
+
+assert created["job"]["state"] == "completed"
+assert {artifact["artifact_type"] for artifact in artifacts["artifacts"]} >= {
+    "video.transcript",
+    "retrieval.chunks",
+    "report.markdown",
+}
+assert search["hits"][0]["artifact_ref"]["producer_tool_id"] == "video-intel"
 ```
 
 FastAPI remains optional:

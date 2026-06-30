@@ -20,14 +20,23 @@ from brain_lab_core.contracts import (
     ArtifactId,
     CONTRACT_SCHEMA_VERSION,
     ContractValidationError,
+    EvidenceRef,
     FreshnessState,
     LifecycleState,
+    Provenance,
+    SourceSpan,
 )
 from brain_lab_core.contracts.base import JsonValue
 from brain_lab_core.orchestration import ArtifactContract, JobPlan, JobRunner, StageExecutionResult, StagePlan
 from brain_lab_core.observability import ObservabilityEvent
-from brain_lab_core.registry import AdapterRegistry, ToolRegistry, fixture_registries
-from brain_lab_core.security import REDACTED, collect_secret_values, is_secret_key, redact_secrets as _redact_secrets
+from brain_lab_core.registry import AdapterRegistry, ToolRegistry, fixture_registries, video_intel_tool_manifest
+from brain_lab_core.security import (
+    REDACTED,
+    SourcePolicyStatus,
+    collect_secret_values,
+    is_secret_key,
+    redact_secrets as _redact_secrets,
+)
 from brain_lab_core.state import SQLiteArtifactLedger
 
 JsonObject = dict[str, JsonValue]
@@ -212,11 +221,18 @@ class FoundationControlPlane:
             raise ContractValidationError("job plan factory changed the submitted job_id")
         if plan.tool_id != submission.tool_id:
             raise ContractValidationError("job plan factory changed the submitted tool_id")
-        job_secret_names = self._secret_names_for_manifest(manifest)
+        secret_sources = (
+            self._config,
+            submission.config,
+            submission.inputs,
+            submission.metadata,
+            plan.config,
+            plan.metadata,
+        )
+        job_secret_names = self._secret_names_for_manifest(manifest, *secret_sources)
         job_secret_values = tuple(
             sorted(
-                collect_secret_values(self._config, job_secret_names)
-                | collect_secret_values(plan.config, job_secret_names),
+                set().union(*(collect_secret_values(source, job_secret_names) for source in secret_sources)),
                 key=len,
                 reverse=True,
             )
@@ -316,7 +332,11 @@ class FoundationControlPlane:
                 secret_names=self._known_job_secret_names(),
                 secret_values=self._known_job_secret_values(),
             )
-        return self._safe(self._ledger_text_search(query=query, collection_name=collection_name, limit=limit))
+        return self._safe(
+            self._ledger_text_search(query=query, collection_name=collection_name, limit=limit),
+            secret_names=self._known_job_secret_names(),
+            secret_values=self._known_job_secret_values(),
+        )
 
     def answer(self, payload: Mapping[str, Any]) -> JsonObject:
         if not isinstance(payload, Mapping):
@@ -345,7 +365,9 @@ class FoundationControlPlane:
                 "answer": "No answer provider configured; returning cited search context only.",
                 "citations": citations,
                 "search": search_result,
-            }
+            },
+            secret_names=self._known_job_secret_names(),
+            secret_values=self._known_job_secret_values(),
         )
 
     def openapi_schema(self) -> JsonObject:
@@ -460,11 +482,34 @@ class FoundationControlPlane:
             "search_state": "ledger_text_fallback",
         }
 
-    def _secret_names_for_manifest(self, manifest: Any) -> tuple[str, ...]:
-        names: set[str] = set()
-        names.update(getattr(manifest, "required_secret_names", ()))
-        names.update(declaration.name for declaration in getattr(manifest, "secret_declarations", ()))
-        return tuple(sorted(str(name) for name in names if str(name).strip()))
+    def _secret_names_for_manifest(self, manifest: Any, *secret_sources: Mapping[str, Any]) -> tuple[str, ...]:
+        """Return manifest secret names that should affect a specific job.
+
+        Required secrets are always part of the job redaction policy. Optional
+        declarations stay in global config/tool discovery redaction, but only
+        become job-scoped when a configured source actually supplies a value.
+        That avoids suppressing artifact/search surfaces for public-source tools
+        whose optional credentials were not used.
+        """
+
+        declarations = tuple(getattr(manifest, "secret_declarations", ()))
+        required_names: set[str] = {str(name) for name in getattr(manifest, "required_secret_names", ())}
+        required_names.update(
+            str(declaration.name) for declaration in declarations if getattr(declaration, "required", False)
+        )
+        optional_names = {
+            str(declaration.name) for declaration in declarations if not getattr(declaration, "required", False)
+        }
+        active_names = {name for name in required_names if name.strip()}
+        for name in optional_names:
+            if not name.strip():
+                continue
+            if collect_secret_values(self._config, (name,)):
+                active_names.add(name)
+                continue
+            if any(collect_secret_values(source, (name,)) for source in secret_sources):
+                active_names.add(name)
+        return tuple(sorted(active_names))
 
     def _attach_job_secret_policy(self, plan: JobPlan, secret_names: Iterable[str]) -> JobPlan:
         names = set(_secret_names_from_metadata(plan.metadata))
@@ -635,6 +680,275 @@ def create_fixture_control_plane(
         runner=runner,
         config=config or {},
         job_plan_factories={"fixture-tool": fixture_job_factory},
+    )
+
+
+def create_video_intel_fixture_control_plane(
+    *,
+    state_root: str | Path,
+    config: Mapping[str, Any] | None = None,
+) -> FoundationControlPlane:
+    """Return a deterministic video-intel integration fixture control plane.
+
+    The real video-intel tool owns media download, ASR, frame analysis, and
+    synthesis. This fixture owns only the generic foundation seam: manifest
+    registration, tool-neutral job planning, ledger-backed artifacts, evidence
+    refs, and API/MCP search surfaces that downstream video-intel integration
+    tests can exercise without third-party binaries, network, or model weights.
+    """
+
+    root = Path(state_root).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    artifact_root = root / "artifacts"
+    tool_registry = ToolRegistry((video_intel_tool_manifest(),))
+    ledger = SQLiteArtifactLedger(root / "ledger.sqlite", artifact_root=artifact_root)
+    runner = JobRunner(ledger)
+
+    def video_intel_job_factory(submission: JobSubmission) -> JobPlan:
+        source_url = str(
+            submission.inputs.get("source_url")
+            or submission.inputs.get("url")
+            or "https://youtu.be/foundation-fixture"
+        ).strip()
+        if not source_url:
+            raise ContractValidationError("video-intel fixture requires source_url")
+        title = str(submission.inputs.get("title") or "Foundation fixture video").strip()
+        transcript_text = str(
+            submission.inputs.get("transcript")
+            or "The foundation control plane stores video transcripts, evidence spans, "
+            "retrieval chunks, and cited reports for video-intel integrations."
+        ).strip()
+        if not transcript_text:
+            raise ContractValidationError("video-intel fixture transcript must not be empty")
+        namespace = "video-intel"
+        media_id = ArtifactId(f"{submission.job_id}-media", namespace=namespace)
+        transcript_id = ArtifactId(f"{submission.job_id}-transcript", namespace=namespace)
+        chunks_id = ArtifactId(f"{submission.job_id}-chunks", namespace=namespace)
+        index_id = ArtifactId(f"{submission.job_id}-index", namespace=namespace)
+        report_id = ArtifactId(f"{submission.job_id}-report", namespace=namespace)
+        artifacts_dir = (artifact_root / namespace).resolve()
+        evidence_id = f"{submission.job_id}-transcript-span-0"
+
+        def artifact_path(suffix: str) -> Path:
+            path = (artifacts_dir / f"{submission.job_id}-{suffix}").resolve()
+            if not path.is_relative_to(artifacts_dir):
+                raise ContractValidationError("video-intel fixture artifact path escaped artifact root")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            return path
+
+        def provenance(stage_id: str, *, source_refs: Iterable[str] = ()) -> Provenance:
+            return Provenance(
+                tool_id="video-intel",
+                stage_id=stage_id,
+                source_refs=tuple(source_refs),
+                source_name=title,
+                source_url=source_url,
+                source_policy_status=SourcePolicyStatus.UNKNOWN,
+                source_policy_notes="fixture records explicit unknown source policy; callers must enforce real media policy",
+                metadata={"fixture": True, "integration_issue": "DH-207"},
+            )
+
+        def ingest(context: Any) -> StageExecutionResult:
+            context.record_progress(0.2, message="recording video-intel media manifest")
+            payload = {
+                "schema_version": "video.media_manifest.v1",
+                "source_url": source_url,
+                "title": title,
+                "duration_seconds": 12.0,
+                "tracks": [{"kind": "audio", "codec": "fixture"}],
+            }
+            path = artifact_path("media.json")
+            path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            artifact = context.register_output(
+                media_id,
+                path,
+                metadata={
+                    "collection_name": "video-intel.media",
+                    "fixture": True,
+                    "stage_contract": "DH-94",
+                },
+                provenance=provenance("ingest"),
+                artifact_uri=source_url,
+            )
+            return StageExecutionResult(output_artifact_ids=(artifact.artifact_id,))
+
+        def transcribe(context: Any) -> StageExecutionResult:
+            context.record_progress(0.45, message="writing deterministic transcript")
+            payload = {
+                "schema_version": "video.transcript.v1",
+                "language": "en",
+                "segments": [
+                    {
+                        "segment_id": "seg-0",
+                        "start_seconds": 0.0,
+                        "end_seconds": 12.0,
+                        "text": transcript_text,
+                    }
+                ],
+            }
+            path = artifact_path("transcript.json")
+            path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            artifact = context.register_output(
+                transcript_id,
+                path,
+                metadata={
+                    "collection_name": "video-intel.transcripts",
+                    "fixture": True,
+                    "stage_contract": "DH-95",
+                },
+                provenance=provenance("transcribe", source_refs=(media_id.qualified,)),
+            )
+            return StageExecutionResult(output_artifact_ids=(artifact.artifact_id,))
+
+        def build_chunks(context: Any) -> StageExecutionResult:
+            context.record_progress(0.65, message="building retrieval chunk evidence")
+            evidence = EvidenceRef(
+                evidence_id=evidence_id,
+                source_artifact_id=transcript_id,
+                source_type="video.transcript",
+                span=SourceSpan(kind="time", start=0.0, end=12.0, unit="seconds", label="seg-0"),
+                quote=transcript_text,
+                confidence=1.0,
+                provenance=provenance("build-chunks", source_refs=(transcript_id.qualified,)),
+                metadata={"fixture": True, "collection_name": "video-intel.chunks"},
+            )
+            evidence = context.register_evidence_ref(evidence)
+            payload = {
+                "schema_version": "retrieval.chunks.v1",
+                "collection_name": "video-intel.chunks",
+                "chunks": [
+                    {
+                        "chunk_id": f"{submission.job_id}-chunk-0",
+                        "text": transcript_text,
+                        "artifact_id": transcript_id.qualified,
+                        "evidence_refs": [evidence.to_dict()],
+                    }
+                ],
+            }
+            path = artifact_path("chunks.json")
+            path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            artifact = context.register_output(
+                chunks_id,
+                path,
+                metadata={
+                    "collection_name": "video-intel.chunks",
+                    "fixture": True,
+                    "stage_contract": "DH-100",
+                    "evidence_ids": [evidence_id],
+                },
+                provenance=provenance("build-chunks", source_refs=(transcript_id.qualified,)),
+            )
+            return StageExecutionResult(output_artifact_ids=(artifact.artifact_id,))
+
+        def index_chunks(context: Any) -> StageExecutionResult:
+            context.record_progress(0.8, message="recording retrieval index result")
+            payload = {
+                "schema_version": "retrieval.index_result.v1",
+                "collection_name": "video-intel.chunks",
+                "indexed_count": 1,
+                "source_artifact_ids": [chunks_id.qualified],
+            }
+            path = artifact_path("index.json")
+            path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            artifact = context.register_output(
+                index_id,
+                path,
+                metadata={
+                    "collection_name": "video-intel.indexes",
+                    "fixture": True,
+                    "stage_contract": "DH-101",
+                },
+                provenance=provenance("index-chunks", source_refs=(chunks_id.qualified,)),
+            )
+            return StageExecutionResult(output_artifact_ids=(artifact.artifact_id,))
+
+        def synthesize(context: Any) -> StageExecutionResult:
+            context.record_progress(0.95, message="writing cited video-intel report")
+            report = (
+                f"# {title}\n\n"
+                "Video-intel fixture report.\n\n"
+                f"Source: {source_url}\n\n"
+                f"Evidence `{evidence_id}` supports the summary: {transcript_text}\n"
+            )
+            path = artifact_path("report.md")
+            path.write_text(report, encoding="utf-8")
+            artifact = context.register_output(
+                report_id,
+                path,
+                metadata={
+                    "collection_name": "video-intel.reports",
+                    "fixture": True,
+                    "stage_contract": "DH-102",
+                    "evidence_ids": [evidence_id],
+                },
+                provenance=provenance("synthesize", source_refs=(chunks_id.qualified, index_id.qualified)),
+            )
+            return StageExecutionResult(output_artifact_ids=(artifact.artifact_id,))
+
+        return JobPlan(
+            job_id=submission.job_id,
+            tool_id=submission.tool_id,
+            config=submission.config,
+            metadata={
+                "source": "video_intel_fixture_control_plane",
+                "integration_issue": "DH-207",
+                "source_url": source_url,
+            },
+            stages=(
+                StagePlan(
+                    stage_id="ingest",
+                    handler=ingest,
+                    output_artifacts=(
+                        ArtifactContract(media_id, "video.media_manifest", "video.media_manifest.v1"),
+                    ),
+                    metadata={"stage_contract": "DH-94"},
+                ),
+                StagePlan(
+                    stage_id="transcribe",
+                    handler=transcribe,
+                    input_artifact_ids=(media_id,),
+                    output_artifacts=(
+                        ArtifactContract(transcript_id, "video.transcript", "video.transcript.v1"),
+                    ),
+                    metadata={"stage_contract": "DH-95"},
+                ),
+                StagePlan(
+                    stage_id="build-chunks",
+                    handler=build_chunks,
+                    input_artifact_ids=(transcript_id,),
+                    output_artifacts=(
+                        ArtifactContract(chunks_id, "retrieval.chunks", "retrieval.chunks.v1"),
+                    ),
+                    metadata={"stage_contract": "DH-100"},
+                ),
+                StagePlan(
+                    stage_id="index-chunks",
+                    handler=index_chunks,
+                    input_artifact_ids=(chunks_id,),
+                    output_artifacts=(
+                        ArtifactContract(index_id, "retrieval.index_result", "retrieval.index_result.v1"),
+                    ),
+                    metadata={"stage_contract": "DH-101"},
+                ),
+                StagePlan(
+                    stage_id="synthesize",
+                    handler=synthesize,
+                    input_artifact_ids=(chunks_id, index_id),
+                    output_artifacts=(
+                        ArtifactContract(report_id, "report.markdown", "report.markdown.v1"),
+                    ),
+                    metadata={"stage_contract": "DH-102"},
+                ),
+            ),
+        )
+
+    return FoundationControlPlane(
+        tool_registry=tool_registry,
+        adapter_registry=AdapterRegistry(),
+        ledger=ledger,
+        runner=runner,
+        config=config or {},
+        job_plan_factories={"video-intel": video_intel_job_factory},
     )
 
 

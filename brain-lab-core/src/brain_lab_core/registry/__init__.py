@@ -13,6 +13,7 @@ from .fixtures import (
     fixture_registries,
     fixture_tool_manifest,
     register_fixture_tool,
+    video_intel_tool_manifest,
 )
 from .tool_registry import ToolRegistry
 
@@ -25,4 +26,5 @@ __all__ = [
     "fixture_registries",
     "fixture_tool_manifest",
     "register_fixture_tool",
+    "video_intel_tool_manifest",
 ]

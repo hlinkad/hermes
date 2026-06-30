@@ -18,6 +18,7 @@ from brain_lab_core.registry import (
     fixture_provider_spec,
     fixture_tool_manifest,
     register_fixture_tool,
+    video_intel_tool_manifest,
 )
 
 
@@ -155,6 +156,44 @@ class ToolRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(RegistryLookupError, "missing-tool"):
             registry.get("missing-tool")
         self.assertEqual(registry.tools_for_capability("missing.capability"), ())
+
+    def test_video_intel_manifest_fixture_exposes_dh_94_to_dh_103_contract_boundary(self) -> None:
+        manifest = video_intel_tool_manifest()
+        registry = ToolRegistry([manifest])
+        discovery = registry.discovery_document()
+        tool = discovery["tools"][0]
+
+        self.assertEqual(manifest.validate(), ())
+        self.assertEqual(registry.tools_for_capability("video.index"), (manifest,))
+        self.assertEqual(registry.tools_producing_artifact_type("retrieval.index_result"), (manifest,))
+        self.assertEqual(tool["tool_id"], "video-intel")
+        self.assertEqual(tool["required_secret_names"], [])
+        self.assertEqual(tool["secret_declarations"][0]["name"], "VIDEO_INTEL_SOURCE_TOKEN")
+        self.assertEqual(tool["secret_declarations"][0]["required"], False)
+        self.assertEqual(tool["sandbox_policy"]["sandbox_class"], "networked")
+        self.assertEqual(tool["sandbox_policy"]["network"]["mode"], "outbound")
+        self.assertIn("youtube.com", tool["sandbox_policy"]["network"]["allowed_hosts"])
+        self.assertEqual(
+            [dependency["name"] for dependency in tool["dependency_metadata"]],
+            ["yt-dlp", "ffmpeg", "faster-whisper"],
+        )
+        stage_contracts = tool["metadata"]["stage_contracts"]
+        self.assertEqual(len(stage_contracts), 10)
+        self.assertEqual(
+            [contract["issue_id"] for contract in stage_contracts],
+            [f"DH-{number}" for number in range(94, 104)],
+        )
+        self.assertEqual(
+            stage_contracts[7],
+            {
+                "issue_id": "DH-101",
+                "stage_id": "index-chunks",
+                "input_artifact_types": ["retrieval.chunks"],
+                "output_schema_versions": ["retrieval.index_result.v1"],
+            },
+        )
+        self.assertIn("foundation.job_status", tool["output_artifact_types"])
+        json.dumps(discovery, sort_keys=True)
 
 
 class AdapterRegistryTests(unittest.TestCase):
