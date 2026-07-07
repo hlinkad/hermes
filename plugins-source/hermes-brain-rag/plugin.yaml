@@ -1,6 +1,6 @@
 name: hermes-brain-rag
-version: 1.0.0
-description: Injects retrieval context from the local Hermes Brain RAG API before each LLM turn.
+version: 1.1.0
+description: Injects cited brain-first context from AI Lab Foundation /answers before each LLM turn.
 author: Hermes Agent
 provides_hooks:
   - pre_llm_call

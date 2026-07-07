@@ -36,7 +36,16 @@ def isolate_settings(monkeypatch):
         if key.startswith(_ENV_PREFIXES):
             monkeypatch.delenv(key, raising=False)
 
-    from deep_notes import config
+    try:
+        from deep_notes import config
+    except ModuleNotFoundError as exc:
+        # Some lightweight integration tests exercise dependency-free artifacts
+        # (for example Hermes gateway plugins) without installing the full RAG
+        # app stack. Tests that import deep_notes directly will still surface the
+        # missing dependency at their import boundary.
+        if exc.name in {"pydantic", "pydantic_settings"}:
+            return
+        raise
 
     monkeypatch.setattr(
         config.Settings,
