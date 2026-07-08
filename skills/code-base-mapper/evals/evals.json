@@ -1,0 +1,54 @@
+{
+  "skill_name": "code-base-mapper",
+  "evals": [
+    {
+      "id": 1,
+      "name": "python-cli-map-and-index",
+      "prompt": "Use the skill to create a .repo-map/ for evals/files/python-cli. Use default settings.",
+      "expected_output": "A .repo-map/ directory containing map.md, index.md, preflight_inventory.json, work_plan.json, symbol_seeds.json, and validation.json for the Python CLI sample repository.",
+      "files": [
+        "evals/files/python-cli"
+      ],
+      "expectations": [
+        "All generated artifacts are under evals/files/python-cli/.repo-map/.",
+        "map.md includes pyproject.toml plus src/ with app.py, scripts/ with build.sh, and tests/ with test_app.py.",
+        "map.md excludes README.md, docs/usage.md, and dist/generated.js.",
+        "index.md includes Runner, Runner.run, main, test_main, and a CLI command from pyproject.toml when detected.",
+        "index.md links back to map.md.",
+        "validation.json reports a passing status."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "node-service-package-metadata",
+      "prompt": "Use the skill to create a .repo-map/ for evals/files/node-service. Use README and package metadata only as supporting evidence.",
+      "expected_output": "A .repo-map/ directory that maps executable TypeScript/config files and indexes Node service routes, exported constants, classes, and npm scripts with a passing validation.json.",
+      "files": [
+        "evals/files/node-service"
+      ],
+      "expectations": [
+        "map.md includes package.json plus src/ with server.ts and routes/users.ts, and .github/workflows/ with ci.yml.",
+        "map.md excludes README.md, docs/api.md, and build/bundle.js.",
+        "index.md includes ApiServer, API_VERSION, healthRoute, listUsers, and npm script:build.",
+        "Descriptions use README/package metadata only as supporting evidence and keep docs out of the mapped tree.",
+        "validation.json reports a passing status."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "large-repo-auto-partition",
+      "prompt": "Use the skill to create a .repo-map/ for evals/files/partition-repo with large_repo: true, agent_count: auto, max_agents: 4, target_context_window_tokens: 300, and max_context_usage_ratio: 0.40.",
+      "expected_output": "A .repo-map/ directory with a work_plan.json that auto-selects multiple whole-file assignments without duplicate owners, plus map.md, index.md, and validation.json built from the assigned files.",
+      "files": [
+        "evals/files/partition-repo"
+      ],
+      "expectations": [
+        "work_plan.json has large_repo true and agent_count no greater than 4.",
+        "Each included file appears in exactly one assignment.",
+        "No assignment path includes docs, generated output, or .repo-map.",
+        "map.md and index.md are produced under .repo-map/ and reflect the executable/config files from the inventory.",
+        "validation.json reports a passing status."
+      ]
+    }
+  ]
+}

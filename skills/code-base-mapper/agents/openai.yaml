@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Base Mapper"
+  short_description: "Map code repositories for AI agents"
+  default_prompt: "Use $code-base-mapper to create a .repo-map/ structure and symbol index for this repository."

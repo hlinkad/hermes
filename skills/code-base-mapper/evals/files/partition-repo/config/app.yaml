@@ -1,0 +1,2 @@
+service: partition-sample
+workers: 3

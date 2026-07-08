@@ -1,0 +1,6 @@
+[project]
+name = "python-cli-sample"
+version = "0.1.0"
+
+[project.scripts]
+greet = "src.app:main"
